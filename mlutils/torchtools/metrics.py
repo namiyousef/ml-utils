@@ -10,8 +10,9 @@ def _get_tensor_metadata(tensor):
 
 class Metric(torch.nn.Module):
     """ Base class """
-    def __init__(self, reduction='none'):
+    def __init__(self, reduction='none', ignore_index=-100):
         super(Metric, self).__init__()
+        self.ignore_index = ignore_index
         self.reduction = reduction # TODO so far does nothing, but thing about cases when you won't require
         # means, but might requires totals instead, but also cases where you might want outputs to be at batch level,
         # etc. (batch,) where each item is the metric for that batch
@@ -24,7 +25,11 @@ class Metric(torch.nn.Module):
             assert outputs_dim == targets_dim
             if outputs_dtype != torch.int64:
                 outputs = torch.where(outputs >= 0.5, 1, 0)
-            return self._forward(outputs, targets)
+
+            ids_ignore = targets == self.ignore_index
+            filtered_outputs = outputs[~ids_ignore]
+            filtered_targets = targets[~ids_ignore]
+            return self._forward(filtered_outputs, filtered_targets)
 
         else:
             outputs_shape, outputs_dim, outputs_dtype = _get_tensor_metadata(outputs)
@@ -33,13 +38,17 @@ class Metric(torch.nn.Module):
                 # TODO this does not work for probabilistic metrics
                 outputs = torch.argmax(outputs, dim=-1)
                 outputs_shape, outputs_dim, outputs_dtype = _get_tensor_metadata(outputs)
+
             targets = targets.flatten()
             assert outputs_dim == targets_dim
 
             outputs = outputs.flatten()
-            targets = targets.flatten()
 
-            return self._forward(outputs, targets)
+            ids_ignore = targets == self.ignore_index
+            filtered_outputs = outputs[~ids_ignore]
+            filtered_targets = targets[~ids_ignore]
+
+            return self._forward(filtered_outputs, filtered_targets)
 
 
 class MultiAccuracy(torch.nn.Module):
@@ -110,7 +119,8 @@ class FScore(Metric):
         # TODO needs to inherit num classes from here!
         unique_classes = torch.unique(targets)
         if self.average == 'binary':
-            assert len(unique_classes) <= 2  # not equal because you might get a case where it happens
+            assert len(unique_classes) <= 2, f'Found more than 2 classes. Please set "average" to correct value'
+            # not equal because you might get a case where it happens
             # that all the batch is of a certain class only
             # calculate precision and recall
             recall = Recall()(outputs, targets)

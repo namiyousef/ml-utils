@@ -47,6 +47,17 @@ class TestMetrics(unittest.TestCase):
         outputs, targets = test_metric(multiple_batch_probas, multiple_batch)
         assert (outputs == torch.argmax(multiple_batch_probas, dim=-1)).all() and (targets == multiple_batch).all()
 
+        # test ignore index
+        single_batch = torch.tensor([1,2,3,4, 5])
+        single_batch_targets = torch.tensor([1,2,3,4,-100])
+        outputs, targets = test_metric(single_batch, single_batch_targets)
+
+
+        expected_output = torch.tensor([1,2,3,4])
+        assert (outputs == expected_output).all() and (targets == expected_output).all()
+
+
+
 
     def test_recall(self):
         pass
