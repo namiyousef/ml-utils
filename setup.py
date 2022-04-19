@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='mlutils',
+    name='ml-dev-tools',
     version='0.0.2',
     description='Useful functions for Machine Learning',
     author='Yousef Nami',
