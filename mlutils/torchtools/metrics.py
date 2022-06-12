@@ -140,3 +140,8 @@ class FScore(Metric):
                 binary_targets = torch.where(targets == unique_class, 1, 0)
                 f_scores[i] = metric(binary_outputs, binary_targets)
             return torch.mean(f_scores)
+
+
+class InstanceConfidence(Metric):
+    def __init__(self):
+        super(InstanceConfidence, self).__init__()
