@@ -25,7 +25,7 @@ def call_model():
 
 
 class BaseTrainer:
-    def __init__(self, model, optimizer, loss=None, scheduler=None, metrics=None):
+    def __init__(self, model, optimizer, loss=None, scheduler=None, metrics=None, debug=False):
         # TODO think about how metrics would work for the case of multitask learning
 
         self.model = model
@@ -33,6 +33,8 @@ class BaseTrainer:
         self.loss = loss
         self.scheduler = scheduler
         self.metrics = metrics
+
+        self.debug = debug
 
         # TODO do you want the loss packages with or without the model? With huggingface it comes with, e.g. in the return, with normal nn tpyically you treat it
         # as a separate parameter?
@@ -74,11 +76,20 @@ class BaseTrainer:
                 gc.collect()
                 torch.cuda.empty_cache()
 
+                if self.debug:
+                    break
+
             if val_loader:
                 self.test(val_loader)
 
 
     def test(self, test_loader):
+        self.model.eval()
+        with torch.no_grad():
+            pass
+
+        if self.debug:
+            pass
         pass
 
 
@@ -88,6 +99,7 @@ class BaseTrainer:
     def _log(self):
         # default logging behaviour
         pass
+
     def process_gradient(self):
         return None
         # option for clipping
@@ -120,6 +132,7 @@ class BaseTrainer:
 
     def compute_loss(self, model_output_dict):
         # TODO advantage of having this as a separate function is that you can automatically time using a timer wrapper
+        # TODO need to think about if hugginface will be split or not, this has implications for the warnings / errors
         if self.loss:
             # e.g. standard models
             outputs = self.model(model_output_dict['inputs'])
