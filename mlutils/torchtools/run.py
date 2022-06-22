@@ -26,56 +26,81 @@ def call_model():
 # in terms of storage, we want the same plotting capability
 # so for a multi task problem, we will require the metrics we given as a dict with lists for each task, but ultimately in terms of storage they will be the same. The only difference will be that
 # they will have the task name in the parameters
+# the way the metrics are stored will also be affected by the type of reduction used. We'll mandate that metrics from this library must use the same "reduction" term as in PyTorch
 
 class BaseTrainer:
 
     def __init__(self, model, optimizer, loss=None, scheduler=None, metrics=None, debug=False):
-        # TODO think about how metrics would work for the case of multitask learning
 
         self.model = model
         self.optimizer = optimizer
         self.loss = loss
         self.scheduler = scheduler
         self.metrics = metrics
-
         self.debug = debug
 
-
-        # TODO think about this for the multi task setting
         self.history = dict(
             loss=dict(
                 params=self._get_metric_params(self.loss) if self.loss else dict(name='default_model_loss'),
             ),
         )
         if self.metrics:
-            self.history['metrics'] = [
-                dict(params=self._get_metric_params(metric)) for metric in metrics
-            ]
+            # for multi task setting, initialize metrics dict should return a flattened version of the metrics. The task name should be in the params
+            # compute metrics will then have to also be modified for the multi task case to consider this data structure change
+            metrics_dict = self._initialize_metrics_dict()
+            self.history['metrics'] = metrics_dict
+
+
+    # TODO need to re-think how the data structure is working, at the moment it is very confusing. Debugging this will be a nightmare
+
+    # TODO how will it work in the case of multi task models?
+    def _initialize_time_series_store(self, split, collect_batch_data=False):
+        if 'time_series' in self.history['metrics']:
+            for metric_id, metric_dict in enumerate(self.history['metrics']['time_series']):
+                self.history['metrics']['time_series'][metric_id][split] = self._create_empty_time_series_dict(collect_batch_data=collect_batch_data)
+
+    def _initialize_instance_metrics_store(self, split, num_instances, num_features):
+        # TODO should think about a compute by batch feature, e.g. every batch (or num_steps!) you compute the metrics for all of them (including/excluding) the instances within that same batch. At the moment though, not implemented
+        # need to think about post ingestion evaluation
+        if 'instance_metrics' in self.history['metrics']:
+            for metric_id, metric_dict in enumerate(self.history['metrics']['instance_metrics']):
+                self.history['metrics']['instance_metrics'][metric_id][split] = torch.zeros((num_instances, num_features), dtype=torch.float32)
+
+    def _update_instance_metrics_history(self, instance_metrics):
+        if 'instance_metrics' in self.history['metrics']:
+            for metric_id, metric_dict in enumerate(self.history['metrics']['instance_metrics']):
 
     # verbose = 0, only shows warnings and errors
     # verbose = 1, shows info at epoch level
     # verbose = 2, shows info at batch level
     # debug = True, shows the times as well. Note: need to think of replacing the break clause for the debug!
+    # design choice: we don't specify any data related parameters here. The choice is left to the user to define them according to their dataset
     def train(self, train_loader, epochs, val_loader=None, verbose=0, epoch_start_id=0, collect_batch_data=False):
-        # design choice: we don't specify any data related parameters here. The choice is left to the user to define them according to their dataset
         # TODO need to add method for starting from a certain dict! and printing should follow from that
+        _num_train_samples = len(train_loader.dataset)
 
-        self.history['loss']['train'] = self._create_empty_history_dict(collect_batch_data=collect_batch_data)
+        # collect_batch_data only applies for time_series models, it is used to generate the empty_history_dict
+        self.history['loss']['train'] = self._create_empty_time_series_dict(collect_batch_data=collect_batch_data)
         if self.metrics:
-            for metric_id, metric in enumerate(self.metrics):
-                self.history['metrics'][metric_id]['train'] = self._create_empty_history_dict(collect_batch_data=collect_batch_data)
+            self._initialize_time_series_store('train', collect_batch_data=collect_batch_data)
+            self._initialize_instance_metrics_store('train', num_instances=_num_train_samples, num_features=epochs)
 
         if val_loader:
-            self.history['loss']['validation'] = self._create_empty_history_dict(collect_batch_data=collect_batch_data)
+            _num_validation_samples = len(val_loader.dataset)
+            self.history['loss']['validation'] = self._create_empty_time_series_dict(collect_batch_data=collect_batch_data)
             if self.metrics:
-                for metric_id, metric in enumerate(self.metrics):
-                    self.history['metrics'][metric_id]['validation'] = self._create_empty_history_dict(
-                        collect_batch_data=collect_batch_data)
+                self._initialize_time_series_store('validation', collect_batch_data=collect_batch_data)
+                self._initialize_instance_metrics_store('validation', num_instances=_num_validation_samples, num_features=epochs)
 
-        _num_train_samples = len(train_loader.dataset)
 
         for epoch_id in range(epoch_start_id, epochs):
             running_loss_estimate = 0
+            if self.metrics:
+                if 'time_series' in self.history['metrics']:
+                    running_time_series_estimate = [0] * len(self.history['metrics']['time_series'])
+                else:
+                    running_time_series_estimate = []
+
             batch_metadata = {}
 
             if verbose > 0:
@@ -83,33 +108,40 @@ class BaseTrainer:
             self.model.train()
             _start_load_time = time.time()
             for batch_id, batch in enumerate(train_loader):
+
                 batch = self.prepare_batch(batch)
 
                 # TODO send batch_metadata to GPU, also think about how to choose which items to send and which not to
                 # can probably change this to preprocess gradient, then can have process gradient!
                 self.optimizer.zero_grad()
 
+
                 _start_train_time = time.time()
                 model_output_dict = self.compute_loss(batch)
                 _end_train_time = time.time()
+
                 batch_metadata['train_time'] = _end_train_time - _start_train_time
-                # todo needs to collect the loss same as metrics
+
+                avg_batch_loss = model_output_dict['loss'].item()
+                running_loss_estimate += avg_batch_loss
+                if collect_batch_data:
+                    self.history['loss']['train']['batch'].append(avg_batch_loss)
+
                 if self.metrics:
                     _start_compute_metric_time = time.time()
-                    self.compute_metrics(model_output_dict)
+                    avg_batch_metric_values, instance_metric_values = self.compute_metrics(model_output_dict)
+                    running_time_series_estimate = [curr_estimate + new_value for curr_estimate, new_value in zip(running_time_series_estimate, avg_batch_metric_values)]
+                    self._update_instance_metrics_history(instance_metric_values)
+
                     _end_compute_metric_time = time.time()
                     batch_metadata['compute_metrics_time'] = _end_compute_metric_time - _start_compute_metric_time
-
 
                 # TODO metric calculation and storage in metadata
                 # TODO metric calculation for gradient??
                 _start_optimize_time = time.time()
                 self.process_gradient() # what if process gradient requires inputs, targets, metadata, even the loss value? e.g. things that aren't stored in the model, how we will pass that in?
 
-                avg_batch_loss = model_output_dict['loss'].item()
-                running_loss_estimate += avg_batch_loss
-                if collect_batch_data:
-                    self.history['loss']['train']['batch'].append(avg_batch_loss)
+
 
                 model_output_dict['loss'].backward()
                 self.optimizer.step()
@@ -158,10 +190,10 @@ class BaseTrainer:
     def test(self, test_loader, verbose=0, is_val=False, collect_batch_data=False):
 
         if not is_val:
-            self.history['loss']['test'] = self._create_empty_history_dict(collect_batch_data=collect_batch_data)
+            self.history['loss']['test'] = self._create_empty_time_series_dict(collect_batch_data=collect_batch_data)
             if self.metrics:
                 for metric_id, metric in enumerate(self.metrics):
-                    self.history['metrics'][metric_id]['test'] = self._create_empty_history_dict(
+                    self.history['metrics'][metric_id]['test'] = self._create_empty_time_series_dict(
                         collect_batch_data=collect_batch_data)
 
 
@@ -186,7 +218,15 @@ class BaseTrainer:
                 if self.debug:
                     break
 
-
+    def _initialize_metrics_dict(self):
+        # TODO this has to change for multi task, based on the metrics!
+        time_series_params, instance_metrics_params = self._get_metric_components(self.metrics)
+        metrics_dict = {}
+        if time_series_params:
+            metrics_dict['time_series'] = time_series_params
+        if instance_metrics_params:
+            metrics_dict['instance_metrics'] = instance_metrics_params
+        return metrics_dict
     def save(self):
         pass
 
@@ -222,8 +262,22 @@ class BaseTrainer:
         return batch
 
     def compute_metrics(self, model_output_dict):
-        for metric in self.metrics:
-            metric_value = metric(model_output_dict)
+        avg_batch_time_series_values = []
+        instance_metrics_values = []
+        if 'time_series' in self.history['metrics']:
+            for metric_dict in self.history['metrics']['time_series']:
+                metric_id = metric_dict['params']['metric_id']
+                metric = self.metrics[metric_id] # todo this will change for multitask!
+                score = metric(model_output_dict)
+                avg_batch_time_series_values.append(score)
+        if 'instance_metrics' in self.history['metrics']:
+            for metric_dict in self.history['metrics']['instance_metrics']:
+                metric_id = metric_dict['params']['metric_id']
+                metric = self.metrics[metric_id]  # todo this will change for multitask!
+                instance_ids, instance_scores = metric(model_output_dict)
+                instance_metrics_values.append((instance_ids, instance_scores))
+
+        return avg_batch_time_series_values, instance_metrics_values
 
     def compute_loss(self, batch):
         # TODO advantage of having this as a separate function is that you can automatically time using a timer wrapper
@@ -247,7 +301,32 @@ class BaseTrainer:
 
         return batch
 
-    def _create_empty_history_dict(self, collect_batch_data=False):
+
+    def _get_metric_components(self, metrics):
+        time_series = []
+        instance_metrics = []
+        for metric_id, metric in enumerate(metrics):
+            metric_params = self._get_metric_params(metric)
+            metric_params['metric_id'] = metric_id
+            metric_params_dict = dict(params=metric_params)
+            if metric_params['reduction'] == 'none':
+                instance_metrics.append(metric_params_dict)
+            else:
+                time_series.append(metric_params_dict)
+        return time_series, instance_metrics
+
+
+    # cases: loss always you ignore reduction, so maybe can have an is_loss parameter
+    # cases: metric with no reduction, collect_batch_data=True
+    # cases: metric with reduction, collect_batch-dats=True
+    # and also for collect batch_data False
+    # for instance metrics we have: shape(num_d_points, epochs), shape(num_d_points, batch) (this means you would actually have to re-run through the model!!!!)
+    # for normal metrics we have: shape(epochs, 1) shape(batch, 1)
+
+    # maybe should make a distinction: timeseries vs. instance_metrics. Time series expected to be of the form: batch/epoch num against aggregate score
+    # instance_metric should be of the form: instance_id vs. batch_id/epoch_id with each value being a score. We typically need these reduced at the end (so maybe need metric post-process)
+    def _create_empty_time_series_dict(self, collect_batch_data=False):
+        # todo the empty lists should be replaced with tensors on CPU devices with the correct size based on reduction value of the metric. Need to also think about what collect_batch_data means in this context
         history_dict = {
             'epoch': []
         }
@@ -263,6 +342,15 @@ class BaseTrainer:
             **{param: value for param, value in metric.__dict__.items() if not param.startswith('_')}
         }
         return params
+
+    def _initialize_history_dict(self, split, collect_batch_data=False):
+        self.history['loss'][split] = self._create_empty_time_series_dict(collect_batch_data=collect_batch_data)
+        if self.metrics:
+            for metric_id, metric in enumerate(self.metrics):
+                self.history['metrics'][metric_id][split] = self._create_empty_time_series_dict(
+                    collect_batch_data=collect_batch_data)
+        # TODO logging
+        # TODO for multitask all we will do is add a wrapper that uses this, and then flatten it
 
 
 
