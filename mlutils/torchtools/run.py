@@ -40,31 +40,41 @@ class BaseTrainer:
         # as a separate parameter?
         # todo how to package model and loss together?
 
-
-    def train(self, train_loader, epochs, val_loader=None, verbose=0):
+    # verbose = 0, only shows warnings and errors
+    # verbose = 1, shows info at epoch level
+    # verbose = 2, shows info at batch level
+    # debug = True, shows the times as well. Note: need to think of replacing the break clause for the debug!
+    def train(self, train_loader, epochs, val_loader=None, verbose=0, epoch_start_id=0):
         # design choice: we don't specify any data related parameters here. The choice is left to the user to define them according to their dataset
-
-        for epoch_id in range(epochs):
+        # TODO need to add method for starting from a certain dict! and printing should follow from that
+        for epoch_id in range(epoch_start_id, epochs):
+            batch_metadata = {}
+            if verbose > 0:
+                logger.info(f'Starting training for Epoch {epoch_id+1}...')
             self.model.train()
+            _start_load_time = time.time()
             for batch_id, batch in enumerate(train_loader):
-
                 batch = self.prepare_batch(batch)
 
                 # TODO send batch_metadata to GPU, also think about how to choose which items to send and which not to
                 # can probably change this to preprocess gradient, then can have process gradient!
                 self.optimizer.zero_grad()
 
-
+                _start_train_time = time.time()
                 model_output_dict = self.compute_loss(batch)
-
+                _end_train_time = time.time()
+                batch_metadata['train_time'] = _end_train_time - _start_train_time
 
                 if self.metrics:
+                    _start_compute_metric_time = time.time()
                     self.compute_metrics(model_output_dict)
+                    _end_compute_metric_time = time.time()
+                    batch_metadata['compute_metrics_time'] = _end_compute_metric_time - _start_compute_metric_time
 
 
                 # TODO metric calculation and storage in metadata
                 # TODO metric calculation for gradient??
-
+                _start_optimize_time = time.time()
                 self.process_gradient() # what if process gradient requires inputs, targets, metadata, even the loss value? e.g. things that aren't stored in the model, how we will pass that in?
 
                 model_output_dict['loss'].backward()
@@ -75,9 +85,24 @@ class BaseTrainer:
                 del model_output_dict # metadata, loss (but need to figure out: a) if deleting loss deletes computational graph, b) if metadata needs to be deleted at all?). If a), then need to change design
                 gc.collect()
                 torch.cuda.empty_cache()
-
+                _end_optimize_time = time.time()
+                batch_metadata['optimize_time'] = _end_optimize_time - _start_optimize_time
+                batch_metadata['total_batch_time'] = _end_optimize_time - _start_load_time
+                _start_load_time = time.time()
+                if verbose > 1:
+                    logger.info({"msg": f"Batch {batch_id+1} complete"})
+                    if self.debug:
+                        logger.debug(
+                            {"msg": f"Batch {batch_id+1} metadata", **{k: f'{v:.3g}' for k, v in batch_metadata.items()}}
+                        )
                 if self.debug:
                     break
+            if verbose > 0:
+                logger.info({"msg": f"Epoch {epoch_id+1} complete"})
+                if self.debug:
+                    logger.debug(
+                        {"msg": f"Epoch {epoch_id+1} metadata", }
+                    )
 
             if val_loader:
                 self.test(val_loader)
@@ -147,10 +172,10 @@ class BaseTrainer:
                 return_dict=False
             )
 
+        model_output_dict['loss'] = loss
         model_output_dict['outputs'] = outputs
 
         return model_output_dict
-
 
 
 def HuggingFaceTrainer(BaseTrainer):
