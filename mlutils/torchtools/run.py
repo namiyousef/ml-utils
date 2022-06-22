@@ -23,8 +23,12 @@ logger.addHandler(ch)
 def call_model():
     pass
 
+# in terms of storage, we want the same plotting capability
+# so for a multi task problem, we will require the metrics we given as a dict with lists for each task, but ultimately in terms of storage they will be the same. The only difference will be that
+# they will have the task name in the parameters
 
 class BaseTrainer:
+
     def __init__(self, model, optimizer, loss=None, scheduler=None, metrics=None, debug=False):
         # TODO think about how metrics would work for the case of multitask learning
 
@@ -36,19 +40,44 @@ class BaseTrainer:
 
         self.debug = debug
 
-        # TODO do you want the loss packages with or without the model? With huggingface it comes with, e.g. in the return, with normal nn tpyically you treat it
-        # as a separate parameter?
-        # todo how to package model and loss together?
+
+        # TODO think about this for the multi task setting
+        self.history = dict(
+            loss=dict(
+                params=self._get_metric_params(self.loss) if self.loss else dict(name='default_model_loss'),
+            ),
+        )
+        if self.metrics:
+            self.history['metrics'] = [
+                dict(params=self._get_metric_params(metric)) for metric in metrics
+            ]
 
     # verbose = 0, only shows warnings and errors
     # verbose = 1, shows info at epoch level
     # verbose = 2, shows info at batch level
     # debug = True, shows the times as well. Note: need to think of replacing the break clause for the debug!
-    def train(self, train_loader, epochs, val_loader=None, verbose=0, epoch_start_id=0):
+    def train(self, train_loader, epochs, val_loader=None, verbose=0, epoch_start_id=0, collect_batch_data=False):
         # design choice: we don't specify any data related parameters here. The choice is left to the user to define them according to their dataset
         # TODO need to add method for starting from a certain dict! and printing should follow from that
+
+        self.history['loss']['train'] = self._create_empty_history_dict(collect_batch_data=collect_batch_data)
+        if self.metrics:
+            for metric_id, metric in enumerate(self.metrics):
+                self.history['metrics'][metric_id]['train'] = self._create_empty_history_dict(collect_batch_data=collect_batch_data)
+
+        if val_loader:
+            self.history['loss']['validation'] = self._create_empty_history_dict(collect_batch_data=collect_batch_data)
+            if self.metrics:
+                for metric_id, metric in enumerate(self.metrics):
+                    self.history['metrics'][metric_id]['validation'] = self._create_empty_history_dict(
+                        collect_batch_data=collect_batch_data)
+
+        _num_train_samples = len(train_loader.dataset)
+
         for epoch_id in range(epoch_start_id, epochs):
+            running_loss_estimate = 0
             batch_metadata = {}
+
             if verbose > 0:
                 logger.info(f'Starting training for Epoch {epoch_id+1}...')
             self.model.train()
@@ -64,7 +93,7 @@ class BaseTrainer:
                 model_output_dict = self.compute_loss(batch)
                 _end_train_time = time.time()
                 batch_metadata['train_time'] = _end_train_time - _start_train_time
-
+                # todo needs to collect the loss same as metrics
                 if self.metrics:
                     _start_compute_metric_time = time.time()
                     self.compute_metrics(model_output_dict)
@@ -76,6 +105,11 @@ class BaseTrainer:
                 # TODO metric calculation for gradient??
                 _start_optimize_time = time.time()
                 self.process_gradient() # what if process gradient requires inputs, targets, metadata, even the loss value? e.g. things that aren't stored in the model, how we will pass that in?
+
+                avg_batch_loss = model_output_dict['loss'].item()
+                running_loss_estimate += avg_batch_loss
+                if collect_batch_data:
+                    self.history['loss']['train']['batch'].append(avg_batch_loss)
 
                 model_output_dict['loss'].backward()
                 self.optimizer.step()
@@ -90,32 +124,67 @@ class BaseTrainer:
                 batch_metadata['total_batch_time'] = _end_optimize_time - _start_load_time
                 _start_load_time = time.time()
                 if verbose > 1:
-                    logger.info({"msg": f"Batch {batch_id+1} complete"})
+                    logger.info({"msg": f"Batch {batch_id+1} complete", "loss": avg_batch_loss})
                     if self.debug:
                         logger.debug(
                             {"msg": f"Batch {batch_id+1} metadata", **{k: f'{v:.3g}' for k, v in batch_metadata.items()}}
                         )
                 if self.debug:
                     break
+
+            avg_epoch_loss = running_loss_estimate / (batch_id + 1)
+            self.history['loss']['train']['epoch'].append(avg_epoch_loss)
+            if collect_batch_data:
+                self.history['loss']['train']['epoch_batch_ids'].append((epoch_id+1)*(batch_id+1) - 1) # TODO need to think if this is valid for instance metrics
+
             if verbose > 0:
-                logger.info({"msg": f"Epoch {epoch_id+1} complete"})
+                logger.info({"msg": f"Epoch {epoch_id+1} training complete"})
                 if self.debug:
                     logger.debug(
                         {"msg": f"Epoch {epoch_id+1} metadata", }
                     )
 
             if val_loader:
-                self.test(val_loader)
+                logger.info(f'Starting validation for Epoch {epoch_id+1}...')
+                self.test(val_loader, is_val=True, collect_batch_data=collect_batch_data)
+                logger.info({"msg": f"Epoch {epoch_id+1} validation complete"})
+                if self.debug:
+                    logger.debug(
+                        {"msg": f"Epoch {epoch_id+1} metadata", }
+                    )
+
+        return self.model
+
+    def test(self, test_loader, verbose=0, is_val=False, collect_batch_data=False):
+
+        if not is_val:
+            self.history['loss']['test'] = self._create_empty_history_dict(collect_batch_data=collect_batch_data)
+            if self.metrics:
+                for metric_id, metric in enumerate(self.metrics):
+                    self.history['metrics'][metric_id]['test'] = self._create_empty_history_dict(
+                        collect_batch_data=collect_batch_data)
 
 
-    def test(self, test_loader):
+        # todo needs to differentiate between validation and test!
         self.model.eval()
-        with torch.no_grad():
-            pass
+        _num_test_samples = len(test_loader.dataset)
 
-        if self.debug:
-            pass
-        pass
+        with torch.no_grad():
+            for batch_id, batch in enumerate(test_loader):
+
+                batch = self.prepare_batch(batch)
+
+                model_output_dict = self.compute_loss(batch)
+
+                if self.metrics:
+                    self.compute_metrics(model_output_dict)
+
+                del model_output_dict
+                gc.collect()
+                torch.cuda.empty_cache()
+
+                if self.debug:
+                    break
 
 
     def save(self):
@@ -152,30 +221,49 @@ class BaseTrainer:
 
         return batch
 
-    def compute_metrics(self):
-        pass
+    def compute_metrics(self, model_output_dict):
+        for metric in self.metrics:
+            metric_value = metric(model_output_dict)
 
-    def compute_loss(self, model_output_dict):
+    def compute_loss(self, batch):
         # TODO advantage of having this as a separate function is that you can automatically time using a timer wrapper
         # TODO need to think about if hugginface will be split or not, this has implications for the warnings / errors
         if self.loss:
             # e.g. standard models
-            outputs = self.model(model_output_dict['inputs'])
-            loss = self.loss(outputs, model_output_dict['targets'])
+            outputs = self.model(batch['inputs'])
+            loss = self.loss(outputs, batch['targets'])
         else:
             # TODO what about huggingface + multitask?
             # e.g. HuggingFace models
             loss, outputs = self.model(
-                labels=model_output_dict['targets'],
-                input_ids=model_output_dict['inputs']['input_ids'],
-                attention_mask=model_output_dict['inputs']['attention_mask'],
+                labels=batch['targets'],
+                input_ids=batch['inputs']['input_ids'],
+                attention_mask=batch['inputs']['attention_mask'],
                 return_dict=False
             )
 
-        model_output_dict['loss'] = loss
-        model_output_dict['outputs'] = outputs
+        batch['loss'] = loss
+        batch['outputs'] = outputs
 
-        return model_output_dict
+        return batch
+
+    def _create_empty_history_dict(self, collect_batch_data=False):
+        history_dict = {
+            'epoch': []
+        }
+        if collect_batch_data:
+            history_dict['batch'] = []
+            history_dict['epoch_batch_ids'] = []
+
+        return history_dict
+
+    def _get_metric_params(self, metric):
+        params = {
+            'name': metric.__class__.__name__,
+            **{param: value for param, value in metric.__dict__.items() if not param.startswith('_')}
+        }
+        return params
+
 
 
 def HuggingFaceTrainer(BaseTrainer):
