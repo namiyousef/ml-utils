@@ -58,6 +58,13 @@ class BaseTrainer:
     # debug = True, shows the times as well. Note: need to think of replacing the break clause for the debug!
     # design choice: we don't specify any data related parameters here. The choice is left to the user to define them according to their dataset
     # TODO need to think about stratification
+
+    def _initialize_train_parameters(self, train_loader, collect_time_series_every_n_steps):
+        _num_train_samples = len(train_loader.dataset)
+        _num_train_steps = len(train_loader)
+        _num_train_collect_steps = _num_train_steps // collect_time_series_every_n_steps if collect_time_series_every_n_steps else None
+        return _num_train_samples, _num_train_steps, _num_train_collect_steps
+
     def train(self,
               train_loader,
               epochs,
@@ -68,9 +75,9 @@ class BaseTrainer:
               scale_validation_to_train=True
               ):
         # TODO need to add method for starting from a certain dict! and printing should follow from that
-        _num_train_samples = len(train_loader.dataset)
-        _num_train_steps = len(train_loader)
-        _num_train_collect_steps = _num_train_steps // collect_time_series_every_n_steps if collect_time_series_every_n_steps else None
+        _num_train_samples, _num_train_steps, _num_train_collect_steps = self._initialize_train_parameters(
+            train_loader, collect_time_series_every_n_steps
+        )
 
         # collect_time_series_every_n_steps only applies for time_series models, it is used to generate the empty_history_dict
         self.history['loss']['train'] = self._create_empty_time_series_dict(
@@ -368,7 +375,7 @@ class BaseTrainer:
         if num_steps:
             # TODO need a parameter for this, e.g. num_steps
             history_dict['steps'] = torch.zeros(num_steps)
-            history_dict['epoch_step_ids'] = torch.zeros(num_steps)
+            history_dict['epoch_step_ids'] = torch.zeros(num_epochs)
 
         return history_dict
 
