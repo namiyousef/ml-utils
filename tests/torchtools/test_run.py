@@ -72,9 +72,9 @@ class TestBaseTrainer(unittest.TestCase):
         expected_history_dict = dict(
             loss=dict(params=get_uncounted_metric_params(self.loss)),
             metrics=dict(
-                time_series=[
-                    dict(params=get_counted_metric_params(metric, i)) for i, metric in enumerate(metrics)
-                ],
+                time_series={
+                    i: dict(params=get_uncounted_metric_params(metric)) for i, metric in enumerate(metrics)
+                },
             ),
         )
         assert output_history_dict == expected_history_dict
@@ -93,9 +93,9 @@ class TestBaseTrainer(unittest.TestCase):
         expected_history_dict = dict(
             loss=dict(params=get_uncounted_metric_params(self.loss)),
             metrics=dict(
-                instance_metrics=[
-                    dict(params=get_counted_metric_params(metric, i)) for i, metric in enumerate(metrics)
-                ]
+                instance_metrics={
+                    i: dict(params=get_uncounted_metric_params(metric)) for i, metric in enumerate(metrics)
+                }
             ))
 
         assert output_history_dict == expected_history_dict
@@ -119,14 +119,14 @@ class TestBaseTrainer(unittest.TestCase):
         expected_history_dict = dict(
             loss=dict(params=get_uncounted_metric_params(self.loss)),
             metrics=dict(
-                instance_metrics=[
-                    dict(params=get_counted_metric_params(metrics[1], 1)),
-                    dict(params=get_counted_metric_params(metrics[2], 2))
-                ],
-                time_series=[
-                    dict(params=get_counted_metric_params(metrics[0], 0)),
-                    dict(params=get_counted_metric_params(metrics[3], 3))
-                ]
+                instance_metrics={
+                    1: dict(params=get_uncounted_metric_params(metrics[1])),
+                    2: dict(params=get_uncounted_metric_params(metrics[2]))
+                },
+                time_series={
+                    0: dict(params=get_uncounted_metric_params(metrics[0])),
+                    3: dict(params=get_uncounted_metric_params(metrics[3]))
+                }
             ),
         )
 
@@ -146,7 +146,6 @@ class TestBaseTrainer(unittest.TestCase):
         epochs = 2
 
         model = trainer.train(data_loader, epochs, verbose=2)
-
         output_history = trainer.history
         print(output_history)
         assert set(output_history.keys()) == {'loss'}
@@ -207,7 +206,7 @@ class TestBaseTrainer(unittest.TestCase):
         data_loader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
         epochs = 2
 
-        model = trainer.train(data_loader, epochs, verbose=2, collect_batch_data=True)
+        model = trainer.train(data_loader, epochs, verbose=2, collect_time_series_every_n_steps=5)
 
         output_history = trainer.history
 
