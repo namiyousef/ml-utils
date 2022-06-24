@@ -69,6 +69,13 @@ class BaseTrainer:
                     self.history['metrics']['time_series'][metric_id][split]['step'][step_id] = metric_score
 
 
+    def _update_instance_metrics_history(self, instance_merics_output_dict, split, epoch_id, collect_instance_metrics_every_n_steps=None, data_loader=None, include_current=True):
+        if collect_instance_metrics_every_n_steps:
+            raise NotImplementedError('No support for instance metric collection at arbitrary steps')
+        for metric_id, (instance_ids, instance_scores) in instance_merics_output_dict.items():
+            print(self.history['metrics']['instance_metrics'][metric_id][split][instance_ids, epoch_id])
+            print(instance_scores.shape)
+            self.history['metrics']['instance_metrics'][metric_id][split][instance_ids, epoch_id] = instance_scores
 
     def train(self,
               train_loader,
@@ -158,19 +165,11 @@ class BaseTrainer:
 
 
                     self._update_time_series_history(time_series_output_dict, 'train', collect_time_series_every_n_steps, batch_id, epoch_id)
+
+
+
                     self._update_instance_metrics_history(instance_metrics_output_dict, 'train')
 
-                    if time_series_output_dict:
-                        for metric_id, metric_score in time_series_output_dict.items():
-                            self.history['metrics']['time_series'][metric_id]['train']['epoch'][epoch_id] += metric_score
-                            if not step // collect_time_series_every_n_steps:
-                                step_id = step // collect_time_series_every_n_steps
-                                self.history['metrics']['time_series'][metric_id]['train']['step'][step_id] = metric_score
-                    if instance_metrics_dict:
-                        for metric_id, (instance_ids, instance_scores) in instance_metrics_dict.items():
-                            self.history['metrics']['instance_metrics'][metric_id]['train'][instance_ids] = instance_scores
-
-                    #self._update_instance_metrics_history(instance_metric_values)
 
                     _end_compute_metric_time = time.time()
                     batch_metadata['compute_metrics_time'] = _end_compute_metric_time - _start_compute_metric_time
@@ -417,10 +416,6 @@ class BaseTrainer:
                 # see if metrics_dict acts as a point to this?
                 metrics_dict[metric_id][split] = torch.zeros((num_instances, num_features), dtype=torch.float32)
 
-    def _update_instance_metrics_history(self, instance_metrics):
-        if 'instance_metrics' in self.history['metrics']:
-            for metric_id, metric_dict in enumerate(self.history['metrics']['instance_metrics']):
-                pass
 
     def _initialize_train_parameters(self, train_loader, collect_time_series_every_n_steps):
         _num_train_samples = len(train_loader.dataset)

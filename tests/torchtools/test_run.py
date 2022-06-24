@@ -520,11 +520,10 @@ class TestBaseTrainer(unittest.TestCase):
                 expected_time_series_history[0]['epoch'][epoch_id] += metrics[0](model_output_dict)
                 expected_time_series_history[2]['epoch'][epoch_id] += metrics[2](model_output_dict)
 
-                output_time_series_history = trainer.history['metrics']['time_series']
-                output_time_series_history = {
-                    i: d['train'] for i, d in output_time_series_history.items()
-                }
-                break
+        output_time_series_history = trainer.history['metrics']['time_series']
+        output_time_series_history = {
+            i: d['train'] for i, d in output_time_series_history.items()
+        }
         assert_tensor_objects_equal(output_time_series_history, expected_time_series_history)
 
         logger.info('Test 2 - test ::_update_time_series_history:: without steps')
@@ -574,12 +573,51 @@ class TestBaseTrainer(unittest.TestCase):
                     step_id = batch_id // collect_time_series_every_n_steps
                     expected_time_series_history[2]['step'][step_id] = metrics[2](model_output_dict)
 
-                output_time_series_history = trainer.history['metrics']['time_series']
-                output_time_series_history = {
-                    i: d['train'] for i, d in output_time_series_history.items()
-                }
+        output_time_series_history = trainer.history['metrics']['time_series']
+        output_time_series_history = {
+            i: d['train'] for i, d in output_time_series_history.items()
+        }
 
         assert_tensor_objects_equal(output_time_series_history, expected_time_series_history)
+
+    def test_update_instance_metrics_history(self):
+        logger.info('Test 1 - :_update_instance_metrics_history:')
+
+        metrics = [
+            prepare_torch_metric(torch.nn.L1Loss()),
+            prepare_torch_metric(torch.nn.L1Loss(reduction='none')),
+            prepare_torch_metric(torch.nn.L1Loss(reduction='sum'))
+        ]
+        trainer = BaseTrainer(
+            self.model_mock, self.optimizer_mock, self.loss_mock, self.scheduler_mock, metrics=metrics
+        )
+        split = 'train'
+        num_epochs = 5
+        train_set = self.dataset
+        num_instances = len(train_set)
+
+        train_loader = DataLoader(train_set, batch_size=32)
+        trainer._initialize_time_series_store(split, num_epochs)
+        trainer._initialize_instance_metrics_store(split, num_instances, num_features=num_epochs)
+
+        expected_instance_metric_history = {
+            1: torch.zeros((num_instances, num_epochs))
+        }
+
+        for epoch_id in range(num_epochs):
+            for batch_id, batch in enumerate(train_loader):
+                model_output_dict = trainer.compute_loss(
+                    batch
+                )
+                metrics_output_dict = trainer.compute_metrics(model_output_dict)
+                trainer._update_instance_metrics_history(metrics_output_dict['instance_metrics'], split, epoch_id)
+                expected_instance_ids, expected_instance_scores = metrics[1](batch)
+                expected_instance_metric_history[1][expected_instance_ids, epoch_id] = expected_instance_scores
+
+        output_instance_metrics_history = trainer.history['metrics']['instance_metrics']
+        output_instance_metrics_history = {i: d[split] for i, d in output_instance_metrics_history.items()}
+        assert_tensor_objects_equal(output_instance_metrics_history, expected_instance_metric_history)
+
 
     def test_train(self):
         '''logger.info('Test 1 - test training and history of basic model')
