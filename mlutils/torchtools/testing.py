@@ -1,5 +1,5 @@
 import torch
-
+from collections.abc import Iterable
 
 def assert_tensor_objects_equal(obtained_object, expected_object, check_keys=False, sort_objects=True):
     assert type(obtained_object) == type(expected_object), TypeError(f'object has type={type(obtained_object)} but expected_object has {type(expected_object)}')
@@ -15,9 +15,11 @@ def assert_tensor_objects_equal(obtained_object, expected_object, check_keys=Fal
             if check_keys:
                 assert object_key == expected_key, ValueError(f'Key mismatch: obtained_key={object_key}, expected_key={expected_key}')
             assert_tensor_objects_equal(object_val, expected_val, check_keys=check_keys, sort_objects=sort_objects)
-    elif isinstance(obtained_object, list):
-        assert obtained_object == expected_object # TODO add msgs
     elif isinstance(obtained_object, torch.Tensor):
         assert (obtained_object == expected_object).all(), ValueError(f'Non-matching tensors: obtained={obtained_object}, expected={expected_object}') # TODO add msgs
+    elif isinstance(obtained_object, Iterable):
+        for obtained_item, expected_item in zip(obtained_object, expected_object):
+            assert_tensor_objects_equal(obtained_item, expected_item)
+
     else:
         raise TypeError(f'Got type={type(obtained_object)}')
