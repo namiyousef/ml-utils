@@ -49,7 +49,6 @@ class TestBaseTrainer(unittest.TestCase):
         self.optimizer_mock = OptimizerMock()
         self.scheduler_mock = SchedulerMock()
 
-
     def test_initialize_metrics_dict(self):
         logging.info('Test 1 - test no metrics: output should simply contain loss and associated params')
         trainer = BaseTrainer(
@@ -397,6 +396,37 @@ class TestBaseTrainer(unittest.TestCase):
         assert _num_val_samples == expected_val_samples
         assert _num_val_steps == expected_val_steps
         assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
+
+    def test_compute_loss(self):
+
+        trainer = BaseTrainer(
+            self.model_mock, self.optimizer_mock,  self.loss_mock, self.scheduler_mock
+        )
+        train_set = self.dataset
+        train_loader = DataLoader(train_set, batch_size=32)
+        for batch in train_loader:
+            expected_batch = batch.copy() # should contain inputs, targets, metadata
+            model_output_dict = trainer.compute_loss(
+                batch
+            )  # should contain: inputs, targets, metadata, loss, outputs
+            # manual:
+            expected_inputs = expected_batch['inputs']
+            expected_targets = expected_batch['targets']
+            expected_outputs = self.model_mock(expected_inputs)
+
+            expected_loss = self.loss_mock(expected_outputs, expected_targets)
+            expected_output_dict = dict(
+                outputs=expected_outputs,
+                loss=expected_loss,
+                **expected_batch
+            )
+            for k in model_output_dict:
+                assert (model_output_dict[k] == expected_output_dict[k]).all(), f'{model_output_dict[k]}{expected_output_dict[k]}'
+
+            assert_tensor_objects_equal(model_output_dict, expected_output_dict)
+            break
+        pass
+
 
     def test_train(self):
         '''logging.info('Test 1 - test training and history of basic model')

@@ -42,10 +42,9 @@ class ModelMock:
     def __init__(self):
         pass
 
-    def __call__(self, batch_dict):
-        batch_dict['loss'] = None
-        batch_dict['outputs'] = None
-        return batch_dict
+    def __call__(self, inputs):
+        output = -inputs
+        return output
 
     def to(self, device):
         return self
@@ -60,8 +59,9 @@ class LossMock:
     def __init__(self):
         pass
 
-    def __call__(self):
-        pass
+    def __call__(self, inputs, targets):
+
+        return targets - torch.argmax(inputs)
 
     def backward(self):
         pass
