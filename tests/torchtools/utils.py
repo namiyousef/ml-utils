@@ -60,14 +60,13 @@ class LossMock:
         pass
 
     def __call__(self, inputs, targets):
-
-        return targets - torch.argmax(inputs)
-
+        self.loss = torch.mean(targets - inputs)
+        return self.loss
     def backward(self):
         pass
 
     def item(self):
-        return 0
+        return self.loss.item()
 
     def to(self, device):
         return self
