@@ -59,7 +59,14 @@ class BaseTrainer:
     # design choice: we don't specify any data related parameters here. The choice is left to the user to define them according to their dataset
     # TODO need to think about stratification
 
-
+    def _update_time_series_history(self, time_series_output_dict, split, collect_time_series_every_n_steps, step,
+                                    epoch_id):
+        if time_series_output_dict:
+            for metric_id, metric_score in time_series_output_dict.items():
+                self.history['metrics']['time_series'][metric_id][split]['epoch'][epoch_id] += metric_score
+                if collect_time_series_every_n_steps and not step % collect_time_series_every_n_steps:
+                    step_id = step // collect_time_series_every_n_steps
+                    self.history['metrics']['time_series'][metric_id][split]['step'][step_id] = metric_score
 
 
 
@@ -146,7 +153,13 @@ class BaseTrainer:
                     _start_compute_metric_time = time.time()
                     metrics_output_dict = self.compute_metrics(model_output_dict)
                     time_series_output_dict = metrics_output_dict.get('time_series', None)
-                    instance_metrics_dict = metrics_output_dict.get('instance_metrics', None)
+                    instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
+
+
+
+                    self._update_time_series_history(time_series_output_dict, 'train', collect_time_series_every_n_steps, batch_id, epoch_id)
+                    self._update_instance_metrics_history(instance_metrics_output_dict, 'train')
+
                     if time_series_output_dict:
                         for metric_id, metric_score in time_series_output_dict.items():
                             self.history['metrics']['time_series'][metric_id]['train']['epoch'][epoch_id] += metric_score
@@ -337,7 +350,6 @@ class BaseTrainer:
         for metric_id, metric in metric_map.items():
             metric_params = self._get_metric_params(metric)
             metric_params_dict = dict(params=metric_params)
-            print(metric_params)
             if metric_params['reduction'] == 'none':
                 instance_metrics[metric_id] = metric_params_dict
             else:
@@ -360,7 +372,8 @@ class BaseTrainer:
         }
         if num_steps:
             # TODO need a parameter for this, e.g. num_steps
-            history_dict['steps'] = torch.zeros(num_steps)
+            history_dict['step'] = torch.zeros(num_steps)
+            # TODO consider removing this and adding it as a metadata for the timeseries; also will need one for the actual steps (e.g. the true batch_ids!)
             history_dict['epoch_step_ids'] = torch.zeros(num_epochs)
 
         return history_dict
