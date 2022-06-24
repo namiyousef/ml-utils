@@ -108,5 +108,5 @@ class TorchMetricMock:
 
 def prepare_torch_metric(metric):
     metric._forward = metric.forward
-    metric.forward = lambda batch:  (batch['instance_ids'], metric._forward(batch['inputs'], batch['targets'])) if metric.__dict__['reduction'] == 'none' else metric._forward(batch['inputs'], batch['targets'])
+    metric.forward = lambda batch:  (batch['instance_ids'], metric._forward(batch['outputs'].flatten(), batch['targets'])) if metric.__dict__['reduction'] == 'none' else metric._forward(batch['outputs'].flatten(), batch['targets'])
     return metric
