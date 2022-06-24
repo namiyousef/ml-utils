@@ -1,6 +1,6 @@
 # TODO consider changing the name of this
 from mlutils.torchtools.run import BaseTrainer
-from tests.torchtools.utils import LinearModel, SimpleDataset, ModelMock, SchedulerMock, OptimizerMock, LossMock
+from tests.torchtools.utils import LinearModel, SimpleDataset, ModelMock, SchedulerMock, OptimizerMock, LossMock, TorchMetricMock, prepare_torch_metric
 import unittest
 import torch
 import numpy as np
@@ -440,6 +440,46 @@ class TestBaseTrainer(unittest.TestCase):
             assert_tensor_objects_equal(model_output_dict, expected_output_dict)
             break
         pass
+
+
+    def test_compute_metrics(self):
+        metric_1 = torch.nn.L1Loss()
+        # TODO need to ensure this does not lose GPU?
+        metrics = [
+            prepare_torch_metric(torch.nn.L1Loss()),
+            prepare_torch_metric(torch.nn.L1Loss(reduction='none')),
+            prepare_torch_metric(torch.nn.L1Loss(reduction='sum'))
+        ]
+
+        trainer = BaseTrainer(
+            self.model_mock, self.optimizer_mock, self.loss_mock, self.scheduler_mock, metrics=metrics
+        )
+
+        split = 'train'
+        num_epochs = 5
+        num_instances = 10
+        trainer._initialize_time_series_store(split, num_epochs)
+        trainer._initialize_instance_metrics_store(split, num_instances, num_features=num_epochs)
+
+        train_set = self.dataset
+        train_loader = DataLoader(train_set, batch_size=32)
+        for batch in train_loader:
+            model_output_dict = trainer.compute_loss(
+                batch
+            )
+            metrics_output_dict = trainer.compute_metrics(model_output_dict)
+
+            instance_metrics_output_dict = metrics_output_dict['instance_metrics']
+            time_series_output_dict = metrics_output_dict['time_series']
+            expected_instance_metrics_output_dict = {
+                1: metrics[1](model_output_dict)
+            }
+            expected_time_series_output_dict = {
+                0: metrics[0](model_output_dict),
+                2: metrics[2](model_output_dict)
+            }
+            assert_tensor_objects_equal(instance_metrics_output_dict, expected_instance_metrics_output_dict)
+            assert_tensor_objects_equal(time_series_output_dict, expected_time_series_output_dict)
 
 
     def test_train(self):

@@ -59,21 +59,7 @@ class BaseTrainer:
     # design choice: we don't specify any data related parameters here. The choice is left to the user to define them according to their dataset
     # TODO need to think about stratification
 
-    def _initialize_train_parameters(self, train_loader, collect_time_series_every_n_steps):
-        _num_train_samples = len(train_loader.dataset)
-        _num_train_steps = len(train_loader)
-        _num_train_collect_steps = _num_train_steps // collect_time_series_every_n_steps if collect_time_series_every_n_steps else None
-        return _num_train_samples, _num_train_steps, _num_train_collect_steps
 
-    def _initialize_val_parameters(self, val_loader, collect_time_series_every_n_steps, num_train_steps):
-        _num_validation_samples = len(val_loader.dataset)
-        _num_validation_steps = len(val_loader)
-        if collect_time_series_every_n_steps and num_train_steps:
-            # update collect time series to validation value
-            val_to_train_ratio = _num_validation_steps / num_train_steps
-            collect_time_series_every_n_steps = max(1, int(collect_time_series_every_n_steps * val_to_train_ratio))
-
-        return _num_validation_samples, _num_validation_steps, collect_time_series_every_n_steps
 
 
 
@@ -276,25 +262,15 @@ class BaseTrainer:
     def save(self):
         pass
 
-    def _log(self):
-        # default logging behaviour
-        pass
-
     def process_gradient(self):
+        # TODO need to think about options where you want to do processing on the gradient!
+
         return None
         # option for clipping
         #torch.nn.utils.clip_grad_norm_(
         #   parameters=self.model.parameters(), max_norm=MAX_NORM
         #) # one might want to provide this as an input parameter
         pass
-    def _call_model(self):
-        pass
-
-    # TODO need to think about options where you want to do processing on the gradient!
-
-    def _save(self):
-        pass # default save behavioru
-    pass
 
     def prepare_batch(self, batch):
         batch['inputs'] = move_to_device(batch['inputs'])
@@ -308,22 +284,27 @@ class BaseTrainer:
         return batch
 
     def compute_metrics(self, model_output_dict):
+        # TODO may need to re-think data structure. Need to think of an intelligent way of doing this automatically....
+        # it is difficult for metrics that we don't create ourselves. Instead need wrappers for them, but ensuring that:
+        # the dict still stays of the same metric structure (the name will have to inherit/replace the pytorch name)
         time_series_dict = self.history['metrics'].get('time_series', None)
         instance_metrics_dict = self.history['metrics'].get('instance_metrics', None)
         metrics_output_dict = {}
         if time_series_dict:
-            metrics_output_dict['time_series'] = {}
+            time_series_score_dict = {}
             for metric_id in time_series_dict.keys():
                 metric = self.metric_map[metric_id]
                 score = metric(model_output_dict)
-                metrics_output_dict[metric_id] = score
+                time_series_score_dict[metric_id] = score
+            metrics_output_dict['time_series'] = time_series_score_dict
 
         if instance_metrics_dict:
-            metrics_output_dict['instance_metrics'] = {}
+            instance_metrics_score_dict = {}
             for metric_id in instance_metrics_dict.keys():
                 metric = self.metric_map[metric_id]
                 instance_ids, instance_scores = metric(model_output_dict)
-                metrics_output_dict[metric_id] = (instance_ids, instance_scores)
+                instance_metrics_score_dict[metric_id] = (instance_ids, instance_scores)
+            metrics_output_dict['instance_metrics'] = instance_metrics_score_dict
 
         return metrics_output_dict
 
@@ -356,6 +337,7 @@ class BaseTrainer:
         for metric_id, metric in metric_map.items():
             metric_params = self._get_metric_params(metric)
             metric_params_dict = dict(params=metric_params)
+            print(metric_params)
             if metric_params['reduction'] == 'none':
                 instance_metrics[metric_id] = metric_params_dict
             else:
@@ -427,6 +409,20 @@ class BaseTrainer:
             for metric_id, metric_dict in enumerate(self.history['metrics']['instance_metrics']):
                 pass
 
+    def _initialize_train_parameters(self, train_loader, collect_time_series_every_n_steps):
+        _num_train_samples = len(train_loader.dataset)
+        _num_train_steps = len(train_loader)
+        _num_train_collect_steps = _num_train_steps // collect_time_series_every_n_steps if collect_time_series_every_n_steps else None
+        return _num_train_samples, _num_train_steps, _num_train_collect_steps
+
+    def _initialize_val_parameters(self, val_loader, collect_time_series_every_n_steps, num_train_steps):
+        _num_validation_samples = len(val_loader.dataset)
+        _num_validation_steps = len(val_loader)
+        if collect_time_series_every_n_steps and num_train_steps:
+            # update collect time series to validation value
+            val_to_train_ratio = _num_validation_steps / num_train_steps
+            collect_time_series_every_n_steps = max(1, int(collect_time_series_every_n_steps * val_to_train_ratio))
+        return _num_validation_samples, _num_validation_steps, collect_time_series_every_n_steps
 def HuggingFaceTrainer(BaseTrainer):
     def __init__():
         super().__init__()
