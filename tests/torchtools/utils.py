@@ -27,10 +27,10 @@ class SimpleDataset(Dataset):
         return self.y.shape[0]
 
     def __getitem__(self, index):
-
         return dict(
             inputs=self.X[index],
             targets=self.y[index],
+            instance_ids=torch.tensor(index),
             metadata=0,
         )
 
@@ -90,3 +90,23 @@ class SchedulerMock:
 
     def step(self):
         pass
+
+
+class TorchMetricMock:
+    def __init__(self, torch_metric):
+        self.torch_metric = torch_metric
+        if self.torch_metric.__dict__['reduction'] == 'none':
+            self.instance_metric = True
+
+    def forward(self, batch):
+        scores = self.torch_metric(batch['inputs'], batch['outputs'])
+        if self.instance_metric:
+            return batch['instance_ids'], scores
+        else:
+            return scores
+
+
+def prepare_torch_metric(metric):
+    metric._forward = metric.forward
+    metric.forward = lambda batch:  (batch['instance_ids'], metric._forward(batch['inputs'], batch['targets'])) if metric.__dict__['reduction'] == 'none' else metric._forward(batch['inputs'], batch['targets'])
+    return metric
