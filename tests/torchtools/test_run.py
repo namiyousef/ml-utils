@@ -5,10 +5,23 @@ import unittest
 import torch
 import numpy as np
 import random
-import logging
 from torch.utils.data import DataLoader
 
 from mlutils.torchtools.testing import assert_tensor_objects_equal
+
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+# create console handler and set level to debug
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+# create formatter
+date_format = '%Y-%m-%d %H:%M:%S'
+formatter = logging.Formatter('%(asctime)s:%(name)s:%(levelname)s:%(message)s', datefmt=date_format)
+# add formatter to ch
+ch.setFormatter(formatter)
+# add ch to logger
+logger.addHandler(ch)
 
 # TODO figure out pip install for testing?
 get_public_params = lambda object: {param: val for param, val in object.__dict__.items() if not param.startswith('_')}
@@ -50,7 +63,7 @@ class TestBaseTrainer(unittest.TestCase):
         self.scheduler_mock = SchedulerMock()
 
     def test_initialize_metrics_dict(self):
-        logging.info('Test 1 - test no metrics: output should simply contain loss and associated params')
+        logger.info('Test 1 - test no metrics: output should simply contain loss and associated params')
         trainer = BaseTrainer(
             model=self.model,
             optimizer=self.optimizer,
@@ -65,7 +78,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert output_history_dict == expected_history_dict
 
 
-        logging.info('Test 2 - test time series metric: output should contain extra metrics dict with time series')
+        logger.info('Test 2 - test time series metric: output should contain extra metrics dict with time series')
         metrics = [torch.nn.L1Loss()]
         trainer = BaseTrainer(
             model=self.model,
@@ -85,7 +98,7 @@ class TestBaseTrainer(unittest.TestCase):
         )
         assert output_history_dict == expected_history_dict
 
-        logging.info('Test 3 - test instance metric')
+        logger.info('Test 3 - test instance metric')
         metrics = [torch.nn.L1Loss(reduction='none')]
 
         trainer = BaseTrainer(
@@ -106,7 +119,7 @@ class TestBaseTrainer(unittest.TestCase):
 
         assert output_history_dict == expected_history_dict
 
-        logging.info('Test 4 - test both types of metrics')
+        logger.info('Test 4 - test both types of metrics')
 
         metrics = [
             torch.nn.L1Loss(),
@@ -139,7 +152,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert output_history_dict == expected_history_dict
 
     def test_initialize_train_parameters(self):
-        logging.info('Test 1 - test initialize train parameters for collect_time_series_every_n_steps')
+        logger.info('Test 1 - test initialize train parameters for collect_time_series_every_n_steps')
         X = torch.ones((100, 2))
         y = torch.ones(100)
         train_set = SimpleDataset(X, y)
@@ -161,7 +174,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert expected_train_steps == _num_train_steps
         assert _num_train_collect_steps == expected_train_collect_steps
 
-        logging.info('Test 2 - test initialize train parameters for no collect_time_series_every_n_steps')
+        logger.info('Test 2 - test initialize train parameters for no collect_time_series_every_n_steps')
 
         trainer = BaseTrainer(
             model_mock, optimizer_mock, loss_mock, scheduler_mock
@@ -176,7 +189,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert expected_train_steps == _num_train_steps
         assert _num_train_collect_steps == expected_train_collect_steps
 
-        logging.info('Test 3 - test initialize train parameters perfect split')
+        logger.info('Test 3 - test initialize train parameters perfect split')
 
         trainer = BaseTrainer(
             model_mock, optimizer_mock, loss_mock, scheduler_mock
@@ -191,7 +204,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert expected_train_steps == _num_train_steps
         assert _num_train_collect_steps == expected_train_collect_steps
 
-        logging.info('Test 4 - test initialize train parameters collect only once')
+        logger.info('Test 4 - test initialize train parameters collect only once')
 
         trainer = BaseTrainer(
             model_mock, optimizer_mock, loss_mock, scheduler_mock
@@ -207,7 +220,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert _num_train_collect_steps == expected_train_collect_steps
 
     def test_create_empty_time_series_dict(self):
-        logging.info('Test 1 - test dict created correctly for loss without steps')
+        logger.info('Test 1 - test dict created correctly for loss without steps')
         trainer = BaseTrainer(
             model=self.model,
             optimizer=self.optimizer,
@@ -225,7 +238,7 @@ class TestBaseTrainer(unittest.TestCase):
         )
         assert_tensor_objects_equal(output_loss_metric_dict, expected_loss_metric_dict)
 
-        logging.info('Test 2 - test dict created correctly for loss with steps')
+        logger.info('Test 2 - test dict created correctly for loss with steps')
 
         trainer = BaseTrainer(
             model=self.model,
@@ -252,7 +265,7 @@ class TestBaseTrainer(unittest.TestCase):
     def test_initialize_time_series_store(self):
         metrics = [torch.nn.L1Loss(reduction='none'), torch.nn.L1Loss()]
 
-        logging.info('Test 1 - test time series store')
+        logger.info('Test 1 - test time series store')
         trainer = BaseTrainer(
             self.model_mock, self.optimizer_mock, self.loss_mock, self.scheduler_mock, metrics=metrics
         )
@@ -282,7 +295,7 @@ class TestBaseTrainer(unittest.TestCase):
     def test_initialize_instance_metrics_store(self):
         metrics = [torch.nn.L1Loss(), torch.nn.L1Loss(reduction='none')]
 
-        logging.info('Test 1 - test time series store')
+        logger.info('Test 1 - test time series store')
         trainer = BaseTrainer(
             self.model_mock, self.optimizer_mock, self.loss_mock, self.scheduler_mock, metrics=metrics
         )
@@ -317,7 +330,7 @@ class TestBaseTrainer(unittest.TestCase):
         val_set = SimpleDataset(X, y)
         val_loader = DataLoader(val_set, batch_size=8)
 
-        logging.info('Test 1 - val train params no custom collection')
+        logger.info('Test 1 - val train params no custom collection')
         collect_time_series_every_n_steps = None
 
         _num_val_samples, _num_val_steps, _num_val_collect_steps = trainer._initialize_val_parameters(
@@ -333,7 +346,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert _num_val_steps == expected_val_steps
         assert _num_val_collect_steps == expected_val_collect_steps
 
-        logging.info('Test 2 - val train params scaling: edge case where collection items in train exceeds num steps in val')
+        logger.info('Test 2 - val train params scaling: edge case where collection items in train exceeds num steps in val')
         num_train_steps = 200
         collect_time_series_every_n_steps = 10 # this is for train
 
@@ -349,7 +362,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert _num_val_steps == expected_val_steps
         assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
 
-        logging.info('Test 3 - val train params scaling: normal case')
+        logger.info('Test 3 - val train params scaling: normal case')
         num_train_steps = 100
         collect_time_series_every_n_steps = 10  # this is for train
 
@@ -365,7 +378,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert _num_val_steps == expected_val_steps
         assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
 
-        logging.info('Test 4 - val train params scaling: edge case where val steps > train steps')
+        logger.info('Test 4 - val train params scaling: edge case where val steps > train steps')
         num_train_steps = 10
         collect_time_series_every_n_steps = 10  # this is for train
 
@@ -381,7 +394,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert _num_val_steps == expected_val_steps
         assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
 
-        logging.info('Test 5 - collect every step')
+        logger.info('Test 5 - collect every step')
         num_train_steps = 10
         collect_time_series_every_n_steps = 1  # this is for train
 
@@ -423,13 +436,14 @@ class TestBaseTrainer(unittest.TestCase):
             for k in model_output_dict:
                 assert (model_output_dict[k] == expected_output_dict[k]).all(), f'{model_output_dict[k]}{expected_output_dict[k]}'
 
+            print(model_output_dict)
             assert_tensor_objects_equal(model_output_dict, expected_output_dict)
             break
         pass
 
 
     def test_train(self):
-        '''logging.info('Test 1 - test training and history of basic model')
+        '''logger.info('Test 1 - test training and history of basic model')
         trainer = BaseTrainer(
             model=self.model,
             optimizer=self.optimizer,
@@ -455,7 +469,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert len(output_history['loss']['train']['epoch']) == epochs
 
 
-        logging.info('Test 2 - test training and history of basic model with batch saving')
+        logger.info('Test 2 - test training and history of basic model with batch saving')
 
         trainer = BaseTrainer(
             model=self.model,
@@ -486,7 +500,7 @@ class TestBaseTrainer(unittest.TestCase):
         assert len(output_history['loss']['train']['batch']) == n_batches*epochs, len(output_history['loss']['train']['batch'])
         assert output_history['loss']['train']['epoch_batch_ids'] == [7, 15]'''
 
-        '''logging.info('Test 3 - test training and history of basic model with metrics with batch saving')
+        '''logger.info('Test 3 - test training and history of basic model with metrics with batch saving')
 
         metrics = [torch.nn.L1Loss(), torch.nn.L1Loss(reduction='none'), torch.nn.L1Loss(reduction='mean')]
 
@@ -525,7 +539,7 @@ class TestBaseTrainer(unittest.TestCase):
             assert len(output_metric['train']['batch']) == len(expected_metric['train']['batch'])
             assert len(output_metric['train']['epoch_batch_ids']) == expected_metric['train']['epoch_batch_ids']
 
-        logging.info('Test 4 - test training and history of basic model with metrics and validation and batch saving')'''
+        logger.info('Test 4 - test training and history of basic model with metrics and validation and batch saving')'''
 
         '''plt.plot(self.X, self.y, '.')
         plt.plot(self.X, model(self.X).detach().numpy(), '.')
@@ -538,7 +552,7 @@ class TestBaseTrainer(unittest.TestCase):
         for param in trainer.model.parameters():
             print(param)'''
 
-    '''logging.info('Test - test end to end run BaseTrainer with all parameters')
+    '''logger.info('Test - test end to end run BaseTrainer with all parameters')
 
 
     X = torch.cat(
@@ -573,3 +587,7 @@ class TestBaseTrainer(unittest.TestCase):
         pass
 class TestMultiTaskTrainer(unittest.TestCase):
     pass
+
+
+if __name__ == '__main__':
+    unittest.main()
