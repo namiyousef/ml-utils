@@ -66,8 +66,11 @@ class BaseTrainer:
                 self.history['metrics']['time_series'][metric_id][split]['epoch'][epoch_id] += metric_score
                 if collect_time_series_every_n_steps and not step % collect_time_series_every_n_steps:
                     step_id = step // collect_time_series_every_n_steps
+                    print(step, step_id)
+
                     self.history['metrics']['time_series'][metric_id][split]['step'][step_id] = metric_score
-        
+
+
     # TODO need to use to('cpu') and detach()!
     # TODO need to remove gradient computation for metrics
     def _update_instance_metrics_history(self, instance_merics_output_dict, split, epoch_id, collect_instance_metrics_every_n_steps=None, data_loader=None, include_current=True):
@@ -80,6 +83,13 @@ class BaseTrainer:
         self.history['loss']['train']['epoch'][epoch_id] /= (batch_id + 1)
         if collect_time_series_every_n_steps:
             self.history['loss']['train']['epoch_step_ids'][epoch_id] = (epoch_id+1) * (batch_id+1) - 1
+            self.history['axes']['epoch_step_ids'].append((epoch_id+1) * (batch_id+1) - 1)
+
+    def _update_metric_time_series_history_epoch(self, split, batch_id, epoch_id, collect_time_series_every_n_steps):
+        for metric_id, metric_dict in self.history['metrics']['time_series'].items():
+            metric_dict[split]['epoch'][epoch_id] /= (batch_id + 1)
+
+
 
     def _log_batch_complete(self, verbose, batch_id, avg_batch_loss, metadata):
         if verbose > 1:
@@ -115,7 +125,7 @@ class BaseTrainer:
             num_steps=_num_train_collect_steps
         )
         self.history['axes'] = dict(
-            epoch_step_id=[], # can calculate this in advance...
+            epoch_step_ids=[], # can calculate this in advance...
         )
         if collect_time_series_every_n_steps:
             self.history['axes']['train'] = dict(
@@ -192,6 +202,7 @@ class BaseTrainer:
                     step_id = steps // collect_time_series_every_n_steps
                     logger.info(f'Logging step result at step_id={step_id}')
                     self.history['loss']['train']['step'][step_id] = avg_batch_loss # TODO see if failure occurs because of diff devices here
+                    self.history['axes']['train']['step_id'].append(steps)
 
 
                 if self.metrics:
@@ -199,7 +210,7 @@ class BaseTrainer:
                     metrics_output_dict = self.compute_metrics(model_output_dict)
                     time_series_output_dict = metrics_output_dict.get('time_series', None)
                     instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
-                    self._update_time_series_history(time_series_output_dict, 'train', collect_time_series_every_n_steps, batch_id, epoch_id)
+                    self._update_time_series_history(time_series_output_dict, 'train', collect_time_series_every_n_steps, steps, epoch_id)
                     self._update_instance_metrics_history(instance_metrics_output_dict, 'train', epoch_id)
 
 
@@ -234,7 +245,8 @@ class BaseTrainer:
 
 
             self._update_time_series_history_epoch(batch_id, epoch_id, collect_time_series_every_n_steps)
-
+            self._update_metric_time_series_history_epoch('train', batch_id, epoch_id,
+                                                          collect_time_series_every_n_steps)
 
             self._log_epoch_complete(verbose, 'train', epoch_id)
 
@@ -280,7 +292,7 @@ class BaseTrainer:
                     step_id = steps // collect_time_series_every_n_steps
                     print(steps, collect_time_series_every_n_steps, step_id)
                     self.history['loss']['validation']['step'][step_id] = avg_batch_loss
-                    self.history['axes']['validation']['step_id'].append(step_id)
+                    self.history['axes']['validation']['step_id'].append(steps)
                     print(avg_batch_loss, len(self.history['axes']['validation']['step_id']))
                     print(self.history['loss']['validation']['step'])
 
@@ -292,7 +304,7 @@ class BaseTrainer:
                     time_series_output_dict = metrics_output_dict.get('time_series', None)
                     instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
                     self._update_time_series_history(time_series_output_dict, 'validation',
-                                                     collect_time_series_every_n_steps, batch_id, epoch_id)
+                                                     collect_time_series_every_n_steps, steps, epoch_id)
                     self._update_instance_metrics_history(instance_metrics_output_dict, 'validation', epoch_id)
 
                     _end_compute_metric_time = time.time()
@@ -308,6 +320,10 @@ class BaseTrainer:
                 steps += 1
                 if self.debug:
                     break
+
+        self.history['loss']['validation']['epoch'][epoch_id] /= (batch_id + 1)
+
+        self._update_metric_time_series_history_epoch('validation', batch_id, epoch_id, collect_time_series_every_n_steps)
 
     def get_metric_map(self):
         # TODO this has to change for multi task, based on the metrics!

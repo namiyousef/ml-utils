@@ -654,7 +654,7 @@ class TestBaseTrainer(unittest.TestCase):
 
         train_set = self.dataset
         train_loader = DataLoader(train_set, batch_size=128, shuffle=True)
-        val_loader = DataLoader(train_set, batch_size=32, shuffle=True)
+        val_loader = DataLoader(train_set, batch_size=128, shuffle=True)
         epochs = 10
         trainer.train(train_loader, epochs, val_loader, verbose=2, collect_time_series_every_n_steps=2)
 
@@ -665,14 +665,18 @@ class TestBaseTrainer(unittest.TestCase):
         import matplotlib.pyplot as plt
         # TODO examine the step scores, why do they look dodgy?
 
-        plt.plot(range(len(history['loss']['train']['epoch'])), history['loss']['train']['epoch'], '.')
-        plt.show()
-        plt.plot(range(len(history['loss']['train']['step'])), history['loss']['train']['step'])
+        plt.plot(history['axes']['train']['step_id'], history['loss']['train']['step'])
+        plt.plot(history['axes']['validation']['step_id'], history['loss']['validation']['step'])
+        plt.plot(history['axes']['epoch_step_ids'], history['loss']['train']['epoch'],'.')
+        plt.plot(history['axes']['epoch_step_ids'], history['loss']['validation']['epoch'], '.')
+
         plt.show()
 
-        plt.plot(range(len(history['loss']['validation']['epoch'])), history['loss']['validation']['epoch'], '.')
-        plt.show()
-        plt.plot(range(len(history['loss']['validation']['step'])), history['loss']['validation']['step'])
+        plt.plot(history['axes']['train']['step_id'], history['metrics']['time_series'][0]['train']['step'])
+        plt.plot(history['axes']['validation']['step_id'], history['metrics']['time_series'][0]['validation']['step'])
+        plt.plot(history['axes']['epoch_step_ids'], history['metrics']['time_series'][0]['train']['epoch'], '.')
+        plt.plot(history['axes']['epoch_step_ids'], history['metrics']['time_series'][0]['validation']['epoch'], '.')
+
         plt.show()
 
         '''
