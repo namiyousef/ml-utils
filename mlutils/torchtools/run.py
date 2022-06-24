@@ -42,7 +42,7 @@ class BaseTrainer:
         self.history = dict(
             loss=dict(
                 params=self._get_metric_params(self.loss) if self.loss else dict(name='default_model_loss'),
-            ),
+            )
         )
         if self.metrics:
             # for multi task setting, initialize metrics dict should return a flattened version of the metrics. The task name should be in the params
@@ -67,16 +67,35 @@ class BaseTrainer:
                 if collect_time_series_every_n_steps and not step % collect_time_series_every_n_steps:
                     step_id = step // collect_time_series_every_n_steps
                     self.history['metrics']['time_series'][metric_id][split]['step'][step_id] = metric_score
-
-
+        
+    # TODO need to use to('cpu') and detach()!
+    # TODO need to remove gradient computation for metrics
     def _update_instance_metrics_history(self, instance_merics_output_dict, split, epoch_id, collect_instance_metrics_every_n_steps=None, data_loader=None, include_current=True):
         if collect_instance_metrics_every_n_steps:
             raise NotImplementedError('No support for instance metric collection at arbitrary steps')
         for metric_id, (instance_ids, instance_scores) in instance_merics_output_dict.items():
-            print(self.history['metrics']['instance_metrics'][metric_id][split][instance_ids, epoch_id])
-            print(instance_scores.shape)
             self.history['metrics']['instance_metrics'][metric_id][split][instance_ids, epoch_id] = instance_scores
 
+    def _update_time_series_history_epoch(self, batch_id, epoch_id, collect_time_series_every_n_steps):
+        self.history['loss']['train']['epoch'][epoch_id] /= (batch_id + 1)
+        if collect_time_series_every_n_steps:
+            self.history['loss']['train']['epoch_step_ids'][epoch_id] = (epoch_id+1) * (batch_id+1) - 1
+
+    def _log_batch_complete(self, verbose, batch_id, avg_batch_loss, metadata):
+        if verbose > 1:
+            logger.info({"msg": f"Batch {batch_id + 1} complete", "loss": avg_batch_loss})
+            if self.debug:
+                logger.debug(
+                    {"msg": f"Batch {batch_id + 1} metadata", **{k: f'{v:.3g}' for k, v in metadata.items()}}
+                )
+
+    def _log_epoch_complete(self, verbose, split, epoch_id):
+        if verbose > 0:
+            logger.info({"msg": f"Epoch {epoch_id + 1} of split <{split}> complete"})
+            if self.debug:
+                logger.debug(
+                    {"msg": f"Epoch {epoch_id + 1} metadata", }
+                )
     def train(self,
               train_loader,
               epochs,
@@ -87,7 +106,7 @@ class BaseTrainer:
               ):
         # TODO need to add method for starting from a certain dict! and printing should follow from that
         _num_train_samples, _num_train_steps, _num_train_collect_steps = self._initialize_train_parameters(
-            train_loader, collect_time_series_every_n_steps
+            train_loader, epochs, collect_time_series_every_n_steps
         )
 
         # collect_time_series_every_n_steps only applies for time_series models, it is used to generate the empty_history_dict
@@ -95,6 +114,15 @@ class BaseTrainer:
             num_epochs=epochs,
             num_steps=_num_train_collect_steps
         )
+        self.history['axes'] = dict(
+            epoch_step_id=[], # can calculate this in advance...
+        )
+        if collect_time_series_every_n_steps:
+            self.history['axes']['train'] = dict(
+                step_id=[]
+            )
+
+
         if self.metrics:
             self._initialize_time_series_store('train',
                                                num_epochs=epochs,
@@ -109,13 +137,21 @@ class BaseTrainer:
             _num_validation_samples, _num_validation_steps, _collect_val_time_series_every_n_steps = self._initialize_val_parameters(
                 val_loader,
                 collect_time_series_every_n_steps=collect_time_series_every_n_steps,
-                num_train_steps=_num_train_steps
+                num_train_steps=_num_train_steps,
+                num_epochs=epochs
             )
 
             self.history['loss']['validation'] = self._create_empty_time_series_dict(
                 num_epochs=epochs,
                 num_steps=_num_train_collect_steps
             )
+            if collect_time_series_every_n_steps:
+                self.history['axes']['validation'] = dict(
+                        # map
+                        step_id=[],  # the step at which each epoch is saved
+                    )
+
+
             if self.metrics:
                 self._initialize_time_series_store('validation',
                                                    num_epochs=epochs,
@@ -125,10 +161,10 @@ class BaseTrainer:
                                                         num_instances=_num_validation_samples,
                                                         num_features=epochs
                                                         )
-
+        
+        steps = 0
         for epoch_id in range(epoch_start_id, epochs):
-            step = 0
-            batch_metadata = {}
+            training_metadata = {}
 
             if verbose > 0:
                 logger.info(f'Starting training for Epoch {epoch_id+1}...')
@@ -146,13 +182,15 @@ class BaseTrainer:
                 model_output_dict = self.compute_loss(batch)
                 _end_train_time = time.time()
 
-                batch_metadata['train_time'] = _end_train_time - _start_train_time
+                training_metadata['train_time'] = _end_train_time - _start_train_time
 
                 avg_batch_loss = model_output_dict['loss'].item()
 
                 self.history['loss']['train']['epoch'][epoch_id] += avg_batch_loss
-                if not step % collect_time_series_every_n_steps:
-                    step_id = step // collect_time_series_every_n_steps
+
+                if not steps % collect_time_series_every_n_steps:
+                    step_id = steps // collect_time_series_every_n_steps
+                    logger.info(f'Logging step result at step_id={step_id}')
                     self.history['loss']['train']['step'][step_id] = avg_batch_loss # TODO see if failure occurs because of diff devices here
 
 
@@ -161,18 +199,12 @@ class BaseTrainer:
                     metrics_output_dict = self.compute_metrics(model_output_dict)
                     time_series_output_dict = metrics_output_dict.get('time_series', None)
                     instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
-
-
-
                     self._update_time_series_history(time_series_output_dict, 'train', collect_time_series_every_n_steps, batch_id, epoch_id)
-
-
-
-                    self._update_instance_metrics_history(instance_metrics_output_dict, 'train')
+                    self._update_instance_metrics_history(instance_metrics_output_dict, 'train', epoch_id)
 
 
                     _end_compute_metric_time = time.time()
-                    batch_metadata['compute_metrics_time'] = _end_compute_metric_time - _start_compute_metric_time
+                    training_metadata['compute_metrics_time'] = _end_compute_metric_time - _start_compute_metric_time
 
                 # TODO metric calculation and storage in metadata
                 # TODO metric calculation for gradient??
@@ -190,69 +222,90 @@ class BaseTrainer:
                 gc.collect()
                 torch.cuda.empty_cache()
                 _end_optimize_time = time.time()
-                batch_metadata['optimize_time'] = _end_optimize_time - _start_optimize_time
-                batch_metadata['total_batch_time'] = _end_optimize_time - _start_load_time
+                training_metadata['optimize_time'] = _end_optimize_time - _start_optimize_time
+                training_metadata['total_batch_time'] = _end_optimize_time - _start_load_time
                 _start_load_time = time.time()
-                if verbose > 1:
-                    logger.info({"msg": f"Batch {batch_id+1} complete", "loss": avg_batch_loss})
-                    if self.debug:
-                        logger.debug(
-                            {"msg": f"Batch {batch_id+1} metadata", **{k: f'{v:.3g}' for k, v in batch_metadata.items()}}
-                        )
+
+                self._log_batch_complete(verbose, batch_id, avg_batch_loss, training_metadata)
+
+                steps += 1
                 if self.debug:
                     break
 
-            avg_epoch_loss = running_loss_estimate / (batch_id + 1)
-            self.history['loss']['train']['epoch'].append(avg_epoch_loss)
-            if collect_time_series_every_n_steps:
-                self.history['loss']['train']['epoch_batch_ids'].append((epoch_id+1)*(batch_id+1) - 1) # TODO need to think if this is valid for instance metrics
 
-            if verbose > 0:
-                logger.info({"msg": f"Epoch {epoch_id+1} training complete"})
-                if self.debug:
-                    logger.debug(
-                        {"msg": f"Epoch {epoch_id+1} metadata", }
-                    )
+            self._update_time_series_history_epoch(batch_id, epoch_id, collect_time_series_every_n_steps)
+
+
+            self._log_epoch_complete(verbose, 'train', epoch_id)
 
             if val_loader:
                 logger.info(f'Starting validation for Epoch {epoch_id+1}...')
-                self.test(val_loader, is_val=True, collect_time_series_every_n_steps=collect_time_series_every_n_steps)
-                logger.info({"msg": f"Epoch {epoch_id+1} validation complete"})
-                if self.debug:
-                    logger.debug(
-                        {"msg": f"Epoch {epoch_id+1} metadata", }
-                    )
+                self.test(val_loader, epoch_id=epoch_id, collect_time_series_every_n_steps=_collect_val_time_series_every_n_steps, verbose=verbose)
+                self._log_epoch_complete(verbose, 'validation', epoch_id)
 
         return self.model
 
-    def test(self, test_loader, verbose=0, is_val=False, collect_time_series_every_n_steps=False):
-
-        if not is_val:
+    def test(self, test_loader, verbose=0, epoch_id=None, collect_time_series_every_n_steps=False):
+        #steps = len(self.history['axes']['validation']['step_id']) if collect_time_series_every_n_steps else 0
+        steps = epoch_id * len(test_loader)
+        test_metadata = {}
+        if epoch_id is None:
+            # TODO need to check this
             self.history['loss']['test'] = self._create_empty_time_series_dict(collect_time_series_every_n_steps=collect_time_series_every_n_steps)
             if self.metrics:
                 for metric_id, metric in enumerate(self.metrics):
                     self.history['metrics'][metric_id]['test'] = self._create_empty_time_series_dict(
                         collect_time_series_every_n_steps=collect_time_series_every_n_steps)
+            epoch_id = 0
+
 
 
         # todo needs to differentiate between validation and test!
         self.model.eval()
         _num_test_samples = len(test_loader.dataset)
-
         with torch.no_grad():
+            _start_load_time = time.time()
             for batch_id, batch in enumerate(test_loader):
 
                 batch = self.prepare_batch(batch)
-
+                _start_val_time = time.time()
                 model_output_dict = self.compute_loss(batch)
+                _end_val_time = time.time()
+                test_metadata['train_time'] = _end_val_time - _start_val_time
+
+
+                avg_batch_loss = model_output_dict['loss'].item()
+                self.history['loss']['validation']['epoch'][epoch_id] += avg_batch_loss
+                if not steps % collect_time_series_every_n_steps:
+                    step_id = steps // collect_time_series_every_n_steps
+                    print(steps, collect_time_series_every_n_steps, step_id)
+                    self.history['loss']['validation']['step'][step_id] = avg_batch_loss
+                    self.history['axes']['validation']['step_id'].append(step_id)
+                    print(avg_batch_loss, len(self.history['axes']['validation']['step_id']))
+                    print(self.history['loss']['validation']['step'])
+
+
 
                 if self.metrics:
+                    _start_compute_metric_time = time.time()
+                    metrics_output_dict = self.compute_metrics(model_output_dict)
+                    time_series_output_dict = metrics_output_dict.get('time_series', None)
+                    instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
+                    self._update_time_series_history(time_series_output_dict, 'validation',
+                                                     collect_time_series_every_n_steps, batch_id, epoch_id)
+                    self._update_instance_metrics_history(instance_metrics_output_dict, 'validation', epoch_id)
+
+                    _end_compute_metric_time = time.time()
+                    test_metadata['compute_metrics_time'] = _end_compute_metric_time - _start_compute_metric_time
+
+
+
                     self.compute_metrics(model_output_dict)
 
                 del model_output_dict
                 gc.collect()
                 torch.cuda.empty_cache()
-
+                steps += 1
                 if self.debug:
                     break
 
@@ -299,24 +352,25 @@ class BaseTrainer:
         # TODO may need to re-think data structure. Need to think of an intelligent way of doing this automatically....
         # it is difficult for metrics that we don't create ourselves. Instead need wrappers for them, but ensuring that:
         # the dict still stays of the same metric structure (the name will have to inherit/replace the pytorch name)
-        time_series_dict = self.history['metrics'].get('time_series', None)
-        instance_metrics_dict = self.history['metrics'].get('instance_metrics', None)
-        metrics_output_dict = {}
-        if time_series_dict:
-            time_series_score_dict = {}
-            for metric_id in time_series_dict.keys():
-                metric = self.metric_map[metric_id]
-                score = metric(model_output_dict)
-                time_series_score_dict[metric_id] = score
-            metrics_output_dict['time_series'] = time_series_score_dict
+        with torch.no_grad():
+            time_series_dict = self.history['metrics'].get('time_series', None)
+            instance_metrics_dict = self.history['metrics'].get('instance_metrics', None)
+            metrics_output_dict = {}
+            if time_series_dict:
+                time_series_score_dict = {}
+                for metric_id in time_series_dict.keys():
+                    metric = self.metric_map[metric_id]
+                    score = metric(model_output_dict)
+                    time_series_score_dict[metric_id] = score
+                metrics_output_dict['time_series'] = time_series_score_dict
 
-        if instance_metrics_dict:
-            instance_metrics_score_dict = {}
-            for metric_id in instance_metrics_dict.keys():
-                metric = self.metric_map[metric_id]
-                instance_ids, instance_scores = metric(model_output_dict)
-                instance_metrics_score_dict[metric_id] = (instance_ids, instance_scores)
-            metrics_output_dict['instance_metrics'] = instance_metrics_score_dict
+            if instance_metrics_dict:
+                instance_metrics_score_dict = {}
+                for metric_id in instance_metrics_dict.keys():
+                    metric = self.metric_map[metric_id]
+                    instance_ids, instance_scores = metric(model_output_dict)
+                    instance_metrics_score_dict[metric_id] = (instance_ids, instance_scores)
+                metrics_output_dict['instance_metrics'] = instance_metrics_score_dict
 
         return metrics_output_dict
 
@@ -417,19 +471,20 @@ class BaseTrainer:
                 metrics_dict[metric_id][split] = torch.zeros((num_instances, num_features), dtype=torch.float32)
 
 
-    def _initialize_train_parameters(self, train_loader, collect_time_series_every_n_steps):
+    def _initialize_train_parameters(self, train_loader, num_epochs, collect_time_series_every_n_steps):
         _num_train_samples = len(train_loader.dataset)
-        _num_train_steps = len(train_loader)
+        _num_train_steps = len(train_loader) * num_epochs
         _num_train_collect_steps = _num_train_steps // collect_time_series_every_n_steps if collect_time_series_every_n_steps else None
         return _num_train_samples, _num_train_steps, _num_train_collect_steps
 
-    def _initialize_val_parameters(self, val_loader, collect_time_series_every_n_steps, num_train_steps):
+    def _initialize_val_parameters(self, val_loader, collect_time_series_every_n_steps, num_train_steps, num_epochs):
         _num_validation_samples = len(val_loader.dataset)
-        _num_validation_steps = len(val_loader)
+        _num_validation_steps = len(val_loader) * num_epochs
         if collect_time_series_every_n_steps and num_train_steps:
             # update collect time series to validation value
             val_to_train_ratio = _num_validation_steps / num_train_steps
-            collect_time_series_every_n_steps = max(1, int(collect_time_series_every_n_steps * val_to_train_ratio))
+            _updated_n_steps = int(collect_time_series_every_n_steps * val_to_train_ratio)
+            collect_time_series_every_n_steps = max(1, _updated_n_steps)
         return _num_validation_samples, _num_validation_steps, collect_time_series_every_n_steps
 def HuggingFaceTrainer(BaseTrainer):
     def __init__():
