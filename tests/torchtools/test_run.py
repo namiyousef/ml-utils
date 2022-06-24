@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import random
 import logging
+from torch.utils.data import DataLoader
 
 from mlutils.torchtools.testing import assert_tensor_objects_equal
 
@@ -41,6 +42,13 @@ class TestBaseTrainer(unittest.TestCase):
         self.scheduler = None
         self.loss = torch.nn.MSELoss()
         self.metrics = None
+
+
+        self.model_mock = ModelMock()
+        self.loss_mock = LossMock()
+        self.optimizer_mock = OptimizerMock()
+        self.scheduler_mock = SchedulerMock()
+
 
     def test_initialize_metrics_dict(self):
         logging.info('Test 1 - test no metrics: output should simply contain loss and associated params')
@@ -132,11 +140,42 @@ class TestBaseTrainer(unittest.TestCase):
         assert output_history_dict == expected_history_dict
 
     def test_initialize_train_parameters(self):
-        train_set = None
-        train_loader = None
-        collect_time_series_every_n_steps = None
-        raise NotImplementedError('Need to test for edge cases on the value of collect_time_series_data')
+        logging.info('Test 1 - test initialize train parameters for collect_time_series_every_n_steps')
+        X = torch.ones((100, 2))
+        y = torch.ones(100)
+        train_set = SimpleDataset(X, y)
+        train_loader = DataLoader(train_set, batch_size=8)
+        collect_time_series_every_n_steps = 5
+        model_mock = ModelMock()
+        optimizer_mock = OptimizerMock()
+        scheduler_mock = SchedulerMock()
+        loss_mock = LossMock()  # think about this for huggingface vs non-hugging face
+        trainer = BaseTrainer(
+            model_mock, optimizer_mock, loss_mock, scheduler_mock
+        )
+        _num_train_samples, _num_train_steps, _num_train_collect_steps = trainer._initialize_train_parameters(train_loader, collect_time_series_every_n_steps=collect_time_series_every_n_steps)
+        expected_train_samples = len(train_set)
+        expected_train_steps = len(train_loader)
+        expected_train_collect_steps = 2
 
+        assert expected_train_samples == _num_train_samples
+        assert expected_train_steps == _num_train_steps
+        assert _num_train_collect_steps == expected_train_collect_steps
+
+        logging.info('Test 2 - test initialize train parameters for no collect_time_series_every_n_steps')
+
+        trainer = BaseTrainer(
+            model_mock, optimizer_mock, loss_mock, scheduler_mock
+        )
+        _num_train_samples, _num_train_steps, _num_train_collect_steps = trainer._initialize_train_parameters(
+            train_loader, collect_time_series_every_n_steps=None)
+        expected_train_samples = len(train_set)
+        expected_train_steps = len(train_loader)
+        expected_train_collect_steps = None
+
+        assert expected_train_samples == _num_train_samples
+        assert expected_train_steps == _num_train_steps
+        assert _num_train_collect_steps == expected_train_collect_steps
 
     def test_create_empty_time_series_dict(self):
         logging.info('Test 1 - test dict created correctly for loss without steps')
@@ -180,11 +219,69 @@ class TestBaseTrainer(unittest.TestCase):
         )
         assert_tensor_objects_equal(output_loss_metric_dict, expected_loss_metric_dict)
 
+
     def test_initialize_time_series_store(self):
-        pass
+        metrics = [torch.nn.L1Loss(reduction='none'), torch.nn.L1Loss()]
+
+        logging.info('Test 1 - test time series store')
+        trainer = BaseTrainer(
+            self.model_mock, self.optimizer_mock, self.loss_mock, self.scheduler_mock, metrics=metrics
+        )
+
+        num_epochs = 5
+        split = 'train'
+        num_steps = None
+        trainer._initialize_time_series_store(split, num_epochs, num_steps)
+        output_metric_history = trainer.history['metrics']['time_series']
+
+        metric_id = 1
+        expected_metric_history = {
+            metric_id: dict(
+                params=get_uncounted_metric_params(metrics[metric_id]),
+                train=dict(
+                    epoch=torch.zeros(num_epochs)
+                )
+            )
+        }
+
+        assert output_metric_history[metric_id]['params'] == expected_metric_history[metric_id]['params']
+        assert_tensor_objects_equal(
+            output_metric_history[metric_id][split],
+            expected_metric_history[metric_id][split]
+        )
 
     def test_initialize_instance_metrics_store(self):
+        metrics = [torch.nn.L1Loss(), torch.nn.L1Loss(reduction='none')]
+
+        logging.info('Test 1 - test time series store')
+        trainer = BaseTrainer(
+            self.model_mock, self.optimizer_mock, self.loss_mock, self.scheduler_mock, metrics=metrics
+        )
+
+        num_epochs = 5
+        split = 'train'
+        num_instances = 10
+        trainer._initialize_instance_metrics_store(split, num_instances, num_epochs)
+        output_metric_history = trainer.history['metrics']['instance_metrics']
+
+        metric_id = 1
+        expected_metric_history = {
+            metric_id: dict(
+                params=get_uncounted_metric_params(metrics[metric_id]),
+                train=torch.zeros((num_instances, num_epochs))
+            )
+        }
+
+        assert output_metric_history[metric_id]['params'] == expected_metric_history[metric_id]['params']
+        assert_tensor_objects_equal(
+            output_metric_history[metric_id][split],
+            expected_metric_history[metric_id][split]
+        )
+
+    def test_initialize_val_parameters(self):
         pass
+
+
     def test_train(self):
         '''logging.info('Test 1 - test training and history of basic model')
         trainer = BaseTrainer(
@@ -295,26 +392,35 @@ class TestBaseTrainer(unittest.TestCase):
         for param in trainer.model.parameters():
             print(param)'''
 
-    logging.info('Test - test end to end run BaseTrainer with all parameters')
+    '''logging.info('Test - test end to end run BaseTrainer with all parameters')
 
+
+    X = torch.cat(
+        [torch.arange(100).reshape(-1, 1)**i for i in range(3)],
+        dim=1
+    )
+    y = torch.arange(100)
     epochs = 5
-    train_set = None
-    train_loader = None
-    val_set = None
-    val_loader = None
+    train_set = SimpleDataset(X, y)
+
+    TRAIN_BATCH_SIZE = 20
+    VAL_BATCH_SIZE = 20
+    train_loader = DataLoader(train_set, batch_size=TRAIN_BATCH_SIZE)
+    val_set = SimpleDataset(X, y)
+    val_loader = DataLoader(val_set, batch_size=VAL_BATCH_SIZE)
 
     model_mock = ModelMock()
     optimizer_mock = OptimizerMock()
     scheduler_mock = SchedulerMock()
     loss_mock = LossMock() # think about this for huggingface vs non-hugging face
 
-    metrics = []
+    metrics = [torch.nn.L1Loss(), torch.nn.L1Loss(reduction='none')]
 
     trainer = BaseTrainer(
         model_mock, optimizer_mock, loss_mock, scheduler_mock, metrics,
     )
 
-    trainer.train(train_loader, epochs, val_loader, verbose=2, collect_time_series_every_n_steps=5, scale_validation_to_train=True)
+    trainer.train(train_loader, epochs, val_loader, verbose=2, collect_time_series_every_n_steps=5, scale_validation_to_train=True)'''
 
 
     def test_test(self):
