@@ -177,6 +177,36 @@ class TestBaseTrainer(unittest.TestCase):
         assert expected_train_steps == _num_train_steps
         assert _num_train_collect_steps == expected_train_collect_steps
 
+        logging.info('Test 3 - test initialize train parameters perfect split')
+
+        trainer = BaseTrainer(
+            model_mock, optimizer_mock, loss_mock, scheduler_mock
+        )
+        _num_train_samples, _num_train_steps, _num_train_collect_steps = trainer._initialize_train_parameters(
+            train_loader, collect_time_series_every_n_steps=1)
+        expected_train_samples = len(train_set)
+        expected_train_steps = len(train_loader)
+        expected_train_collect_steps = len(train_loader)
+
+        assert expected_train_samples == _num_train_samples
+        assert expected_train_steps == _num_train_steps
+        assert _num_train_collect_steps == expected_train_collect_steps
+
+        logging.info('Test 4 - test initialize train parameters collect only once')
+
+        trainer = BaseTrainer(
+            model_mock, optimizer_mock, loss_mock, scheduler_mock
+        )
+        _num_train_samples, _num_train_steps, _num_train_collect_steps = trainer._initialize_train_parameters(
+            train_loader, collect_time_series_every_n_steps=len(train_loader))
+        expected_train_samples = len(train_set)
+        expected_train_steps = len(train_loader)
+        expected_train_collect_steps = 1
+
+        assert expected_train_samples == _num_train_samples
+        assert expected_train_steps == _num_train_steps
+        assert _num_train_collect_steps == expected_train_collect_steps
+
     def test_create_empty_time_series_dict(self):
         logging.info('Test 1 - test dict created correctly for loss without steps')
         trainer = BaseTrainer(
@@ -279,8 +309,94 @@ class TestBaseTrainer(unittest.TestCase):
         )
 
     def test_initialize_val_parameters(self):
-        pass
+        # TODO need to do edge cases, e.g. just perfectly divisible
+        trainer = BaseTrainer(
+            self.model_mock, self.optimizer_mock, self.loss_mock, self.scheduler_mock
+        )
+        X = torch.ones((100, 2))
+        y = torch.ones(100)
+        val_set = SimpleDataset(X, y)
+        val_loader = DataLoader(val_set, batch_size=8)
 
+        logging.info('Test 1 - val train params no custom collection')
+        collect_time_series_every_n_steps = None
+
+        _num_val_samples, _num_val_steps, _num_val_collect_steps = trainer._initialize_val_parameters(
+            val_loader, collect_time_series_every_n_steps=collect_time_series_every_n_steps, num_train_steps=None
+
+        )
+
+        expected_val_samples = len(val_set)
+        expected_val_steps = len(val_loader)
+        expected_val_collect_steps = None
+
+        assert _num_val_samples == expected_val_samples
+        assert _num_val_steps == expected_val_steps
+        assert _num_val_collect_steps == expected_val_collect_steps
+
+        logging.info('Test 2 - val train params scaling: edge case where collection items in train exceeds num steps in val')
+        num_train_steps = 200
+        collect_time_series_every_n_steps = 10 # this is for train
+
+        _num_val_samples, _num_val_steps, collect_val_ts_every_n_steps = trainer._initialize_val_parameters(
+            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps
+        )
+
+        expected_val_samples = len(val_set)
+        expected_val_steps = len(val_loader)
+        expected_val_ts_every_n_steps = 1
+
+        assert _num_val_samples == expected_val_samples
+        assert _num_val_steps == expected_val_steps
+        assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
+
+        logging.info('Test 3 - val train params scaling: normal case')
+        num_train_steps = 100
+        collect_time_series_every_n_steps = 10  # this is for train
+
+        _num_val_samples, _num_val_steps, collect_val_ts_every_n_steps = trainer._initialize_val_parameters(
+            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps
+        )
+
+        expected_val_samples = len(val_set)
+        expected_val_steps = len(val_loader)
+        expected_val_ts_every_n_steps = 1
+
+        assert _num_val_samples == expected_val_samples
+        assert _num_val_steps == expected_val_steps
+        assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
+
+        logging.info('Test 4 - val train params scaling: edge case where val steps > train steps')
+        num_train_steps = 10
+        collect_time_series_every_n_steps = 10  # this is for train
+
+        _num_val_samples, _num_val_steps, collect_val_ts_every_n_steps = trainer._initialize_val_parameters(
+            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps
+        )
+
+        expected_val_samples = len(val_set)
+        expected_val_steps = len(val_loader)
+        expected_val_ts_every_n_steps = 13 # this should be correct
+
+        assert _num_val_samples == expected_val_samples
+        assert _num_val_steps == expected_val_steps
+        assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
+
+        logging.info('Test 5 - collect every step')
+        num_train_steps = 10
+        collect_time_series_every_n_steps = 1  # this is for train
+
+        _num_val_samples, _num_val_steps, collect_val_ts_every_n_steps = trainer._initialize_val_parameters(
+            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps
+        )
+
+        expected_val_samples = len(val_set)
+        expected_val_steps = len(val_loader)
+        expected_val_ts_every_n_steps = 1  # this should be correct
+
+        assert _num_val_samples == expected_val_samples
+        assert _num_val_steps == expected_val_steps
+        assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
 
     def test_train(self):
         '''logging.info('Test 1 - test training and history of basic model')

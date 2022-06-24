@@ -65,6 +65,18 @@ class BaseTrainer:
         _num_train_collect_steps = _num_train_steps // collect_time_series_every_n_steps if collect_time_series_every_n_steps else None
         return _num_train_samples, _num_train_steps, _num_train_collect_steps
 
+    def _initialize_val_parameters(self, val_loader, collect_time_series_every_n_steps, num_train_steps):
+        _num_validation_samples = len(val_loader.dataset)
+        _num_validation_steps = len(val_loader)
+        if collect_time_series_every_n_steps and num_train_steps:
+            # update collect time series to validation value
+            val_to_train_ratio = _num_validation_steps / num_train_steps
+            collect_time_series_every_n_steps = max(1, int(collect_time_series_every_n_steps * val_to_train_ratio))
+
+        return _num_validation_samples, _num_validation_steps, collect_time_series_every_n_steps
+
+
+
     def train(self,
               train_loader,
               epochs,
@@ -72,7 +84,6 @@ class BaseTrainer:
               verbose=0,
               epoch_start_id=0,
               collect_time_series_every_n_steps=None,
-              scale_validation_to_train=True
               ):
         # TODO need to add method for starting from a certain dict! and printing should follow from that
         _num_train_samples, _num_train_steps, _num_train_collect_steps = self._initialize_train_parameters(
@@ -95,27 +106,20 @@ class BaseTrainer:
                                                     )
 
         if val_loader:
-            _num_validation_samples = len(val_loader.dataset)
-            _num_validation_steps = len(val_loader)
-            if collect_time_series_every_n_steps:
-
-                if scale_validation_to_train:
-                    val_to_train_ratio = _num_validation_steps / _num_train_steps
-                    _num_val_collect_steps = _num_validation_steps // (collect_time_series_every_n_steps * val_to_train_ratio)
-                else:
-                    _num_val_collect_steps = _num_validation_steps // collect_time_series_every_n_steps
-            else:
-                _num_val_collect_steps = None
-
+            _num_validation_samples, _num_validation_steps, _collect_val_time_series_every_n_steps = self._initialize_val_parameters(
+                val_loader,
+                collect_time_series_every_n_steps=collect_time_series_every_n_steps,
+                num_train_steps=_num_train_steps
+            )
 
             self.history['loss']['validation'] = self._create_empty_time_series_dict(
                 num_epochs=epochs,
-                num_steps=_num_val_collect_steps
+                num_steps=_num_train_collect_steps
             )
             if self.metrics:
                 self._initialize_time_series_store('validation',
                                                    num_epochs=epochs,
-                                                   num_steps=_num_val_collect_steps
+                                                   num_steps=_num_train_collect_steps
                                                    )
                 self._initialize_instance_metrics_store('validation',
                                                         num_instances=_num_validation_samples,
@@ -403,7 +407,7 @@ class BaseTrainer:
     def _initialize_time_series_store(self, split, num_epochs, num_steps=None):
         metrics_dict = self.history['metrics'].get('time_series', None)
         if metrics_dict:
-            for metric_id, metric_dict in enumerate(metrics_dict):
+            for metric_id, metric_dict in metrics_dict.items():
                 self.history['metrics']['time_series'][metric_id][split] = self._create_empty_time_series_dict(
                     num_epochs=num_epochs,
                     num_steps=num_steps
@@ -414,12 +418,9 @@ class BaseTrainer:
         # need to think about post ingestion evaluation
         metrics_dict = self.history['metrics'].get('instance_metrics', None)
         if metrics_dict:
-            for metric_id, metric_dict in enumerate(metrics_dict):
+            for metric_id, metric_dict in metrics_dict.items():
                 # see if metrics_dict acts as a point to this?
-                metrics_dict[metric_id][split] = 'DJANGO'
-                print(self.history)
-                raise Exception()
-                self.history['metrics']['instance_metrics'][metric_id][split] = torch.zeros((num_instances, num_features), dtype=torch.float32)
+                metrics_dict[metric_id][split] = torch.zeros((num_instances, num_features), dtype=torch.float32)
 
     def _update_instance_metrics_history(self, instance_metrics):
         if 'instance_metrics' in self.history['metrics']:
