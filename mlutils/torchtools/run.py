@@ -66,7 +66,6 @@ class BaseTrainer:
                 self.history['metrics']['time_series'][metric_id][split]['epoch'][epoch_id] += metric_score
                 if collect_time_series_every_n_steps and not step % collect_time_series_every_n_steps:
                     step_id = step // collect_time_series_every_n_steps
-                    print(step, step_id)
 
                     self.history['metrics']['time_series'][metric_id][split]['step'][step_id] = metric_score
 
@@ -79,11 +78,7 @@ class BaseTrainer:
         for metric_id, (instance_ids, instance_scores) in instance_merics_output_dict.items():
             self.history['metrics']['instance_metrics'][metric_id][split][instance_ids, epoch_id] = instance_scores
 
-    def _update_time_series_history_epoch(self, batch_id, epoch_id, collect_time_series_every_n_steps):
-        self.history['loss']['train']['epoch'][epoch_id] /= (batch_id + 1)
-        if collect_time_series_every_n_steps:
-            self.history['loss']['train']['epoch_step_ids'][epoch_id] = (epoch_id+1) * (batch_id+1) - 1
-            self.history['axes']['epoch_step_ids'].append((epoch_id+1) * (batch_id+1) - 1)
+
 
     def _update_metric_time_series_history_epoch(self, split, batch_id, epoch_id, collect_time_series_every_n_steps):
         for metric_id, metric_dict in self.history['metrics']['time_series'].items():
@@ -106,6 +101,50 @@ class BaseTrainer:
                 logger.debug(
                     {"msg": f"Epoch {epoch_id + 1} metadata", }
                 )
+
+    def _initialize_loss_history(self, split, num_epochs, num_steps, collect_time_series_every_n_steps):
+        self.history['loss'][split] = self._create_empty_time_series_dict(
+            num_epochs=num_epochs,
+            num_steps=num_steps
+        )
+        if self.debug:
+            logger.debug(f'Initialized <{split}> loss history')
+        if collect_time_series_every_n_steps:
+            self.history['axes'][split] = dict(step_id=[])
+            if self.debug:
+                logger.debug(f'Initialized <{split}> loss history with step_id')
+
+    def _initialize_metrics_store(self, split, num_epochs, num_steps, num_instances):
+        self._initialize_time_series_store(split,
+                                           num_epochs=num_epochs,
+                                           num_steps=num_steps
+                                           )
+        self._initialize_instance_metrics_store(split,
+                                                num_instances=num_instances,
+                                                num_features=num_epochs
+                                                )
+        if self.debug:
+            logger.debug(f'Initialized metrics score for <{split}>')
+
+    def _update_loss_batch(self, split, epoch_id, avg_batch_loss, steps, collect_time_series_every_n_steps):
+
+        self.history['loss'][split]['epoch'][epoch_id] += avg_batch_loss
+
+        if collect_time_series_every_n_steps and not steps % collect_time_series_every_n_steps:
+            step_id = steps // collect_time_series_every_n_steps
+            self.history['loss'][split]['step'][
+                step_id] = avg_batch_loss  # TODO see if failure occurs because of diff devices here
+            self.history['axes'][split]['step_id'].append(steps)
+
+    def _update_metrics_batch(self, split, metrics_output_dict, steps, epoch_id, collect_time_series_every_n_steps):
+        time_series_output_dict = metrics_output_dict.get('time_series', None)
+        instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
+        self._update_time_series_history(
+            time_series_output_dict, split, collect_time_series_every_n_steps, steps, epoch_id)
+        self._update_instance_metrics_history(
+            instance_metrics_output_dict, split, epoch_id)
+
+
     def train(self,
               train_loader,
               epochs,
@@ -114,34 +153,20 @@ class BaseTrainer:
               epoch_start_id=0,
               collect_time_series_every_n_steps=None,
               ):
-        # TODO need to add method for starting from a certain dict! and printing should follow from that
+        logger.info('Initializing training...')
+        # initialize global axes collection
+        self.history['axes'] = dict(epoch_step_ids=[])
+
+        # initialize training parameters and history collection
         _num_train_samples, _num_train_steps, _num_train_collect_steps = self._initialize_train_parameters(
             train_loader, epochs, collect_time_series_every_n_steps
         )
-
-        # collect_time_series_every_n_steps only applies for time_series models, it is used to generate the empty_history_dict
-        self.history['loss']['train'] = self._create_empty_time_series_dict(
-            num_epochs=epochs,
-            num_steps=_num_train_collect_steps
-        )
-        self.history['axes'] = dict(
-            epoch_step_ids=[], # can calculate this in advance...
-        )
-        if collect_time_series_every_n_steps:
-            self.history['axes']['train'] = dict(
-                step_id=[]
-            )
-
+        self._initialize_loss_history('train', epochs, _num_train_collect_steps, collect_time_series_every_n_steps)
 
         if self.metrics:
-            self._initialize_time_series_store('train',
-                                               num_epochs=epochs,
-                                               num_steps=_num_train_collect_steps
-                                               )
-            self._initialize_instance_metrics_store('train',
-                                                    num_instances=_num_train_samples,
-                                                    num_features=epochs
-                                                    )
+            self._initialize_metrics_store('train', epochs, _num_train_collect_steps, _num_train_samples)
+
+        # TODO debug mode breaks model (in terms of plotting, need to make more robust)
 
         if val_loader:
             _num_validation_samples, _num_validation_steps, _collect_val_time_series_every_n_steps = self._initialize_val_parameters(
@@ -150,27 +175,10 @@ class BaseTrainer:
                 num_train_steps=_num_train_steps,
                 num_epochs=epochs
             )
-
-            self.history['loss']['validation'] = self._create_empty_time_series_dict(
-                num_epochs=epochs,
-                num_steps=_num_train_collect_steps
-            )
-            if collect_time_series_every_n_steps:
-                self.history['axes']['validation'] = dict(
-                        # map
-                        step_id=[],  # the step at which each epoch is saved
-                    )
-
+            self._initialize_loss_history('validation', epochs, _num_train_collect_steps, _collect_val_time_series_every_n_steps)
 
             if self.metrics:
-                self._initialize_time_series_store('validation',
-                                                   num_epochs=epochs,
-                                                   num_steps=_num_train_collect_steps
-                                                   )
-                self._initialize_instance_metrics_store('validation',
-                                                        num_instances=_num_validation_samples,
-                                                        num_features=epochs
-                                                        )
+                self._initialize_metrics_store('validation', epochs, _num_train_collect_steps, _num_validation_samples)
         
         steps = 0
         for epoch_id in range(epoch_start_id, epochs):
@@ -180,8 +188,10 @@ class BaseTrainer:
                 logger.info(f'Starting training for Epoch {epoch_id+1}...')
 
             self.model.train()
+
             _start_load_time = time.time()
             for batch_id, batch in enumerate(train_loader):
+
                 batch = self.prepare_batch(batch)
 
                 # TODO send batch_metadata to GPU, also think about how to choose which items to send and which not to
@@ -196,26 +206,18 @@ class BaseTrainer:
 
                 avg_batch_loss = model_output_dict['loss'].item()
 
-                self.history['loss']['train']['epoch'][epoch_id] += avg_batch_loss
-
-                if not steps % collect_time_series_every_n_steps:
-                    step_id = steps // collect_time_series_every_n_steps
-                    logger.info(f'Logging step result at step_id={step_id}')
-                    self.history['loss']['train']['step'][step_id] = avg_batch_loss # TODO see if failure occurs because of diff devices here
-                    self.history['axes']['train']['step_id'].append(steps)
+                self._update_loss_batch('train', epoch_id, avg_batch_loss, steps, collect_time_series_every_n_steps)
 
 
                 if self.metrics:
                     _start_compute_metric_time = time.time()
                     metrics_output_dict = self.compute_metrics(model_output_dict)
-                    time_series_output_dict = metrics_output_dict.get('time_series', None)
-                    instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
-                    self._update_time_series_history(time_series_output_dict, 'train', collect_time_series_every_n_steps, steps, epoch_id)
-                    self._update_instance_metrics_history(instance_metrics_output_dict, 'train', epoch_id)
-
-
                     _end_compute_metric_time = time.time()
                     training_metadata['compute_metrics_time'] = _end_compute_metric_time - _start_compute_metric_time
+
+                    self._update_metrics_batch('train', metrics_output_dict, steps, epoch_id, collect_time_series_every_n_steps)
+
+
 
                 # TODO metric calculation and storage in metadata
                 # TODO metric calculation for gradient??
@@ -232,6 +234,7 @@ class BaseTrainer:
                 del model_output_dict # metadata, loss (but need to figure out: a) if deleting loss deletes computational graph, b) if metadata needs to be deleted at all?). If a), then need to change design
                 gc.collect()
                 torch.cuda.empty_cache()
+
                 _end_optimize_time = time.time()
                 training_metadata['optimize_time'] = _end_optimize_time - _start_optimize_time
                 training_metadata['total_batch_time'] = _end_optimize_time - _start_load_time
@@ -240,11 +243,11 @@ class BaseTrainer:
                 self._log_batch_complete(verbose, batch_id, avg_batch_loss, training_metadata)
 
                 steps += 1
+
                 if self.debug:
                     break
 
-
-            self._update_time_series_history_epoch(batch_id, epoch_id, collect_time_series_every_n_steps)
+            self._update_loss_history_epoch('train', batch_id, epoch_id, collect_time_series_every_n_steps, is_train=True)
             self._update_metric_time_series_history_epoch('train', batch_id, epoch_id,
                                                           collect_time_series_every_n_steps)
 
@@ -258,23 +261,23 @@ class BaseTrainer:
         return self.model
 
     def test(self, test_loader, verbose=0, epoch_id=None, collect_time_series_every_n_steps=False):
-        #steps = len(self.history['axes']['validation']['step_id']) if collect_time_series_every_n_steps else 0
-        steps = epoch_id * len(test_loader)
-        test_metadata = {}
-        if epoch_id is None:
-            # TODO need to check this
-            self.history['loss']['test'] = self._create_empty_time_series_dict(collect_time_series_every_n_steps=collect_time_series_every_n_steps)
-            if self.metrics:
-                for metric_id, metric in enumerate(self.metrics):
-                    self.history['metrics'][metric_id]['test'] = self._create_empty_time_series_dict(
-                        collect_time_series_every_n_steps=collect_time_series_every_n_steps)
-            epoch_id = 0
-
-
-
-        # todo needs to differentiate between validation and test!
-        self.model.eval()
+        _num_test_steps = len(test_loader)
         _num_test_samples = len(test_loader.dataset)
+        test_metadata = {}
+
+        if epoch_id is None:
+            split = 'test'
+            epoch_id = 0
+            self._initialize_loss_history(split, 1, _num_test_steps, collect_time_series_every_n_steps)
+            if self.metrics:
+                self._initialize_metrics_store(split, 1, _num_test_steps, _num_test_samples)
+        else:
+            split = 'validation'
+
+        steps = epoch_id * _num_test_steps
+
+
+        self.model.eval()
         with torch.no_grad():
             _start_load_time = time.time()
             for batch_id, batch in enumerate(test_loader):
@@ -287,43 +290,30 @@ class BaseTrainer:
 
 
                 avg_batch_loss = model_output_dict['loss'].item()
-                self.history['loss']['validation']['epoch'][epoch_id] += avg_batch_loss
-                if not steps % collect_time_series_every_n_steps:
-                    step_id = steps // collect_time_series_every_n_steps
-                    print(steps, collect_time_series_every_n_steps, step_id)
-                    self.history['loss']['validation']['step'][step_id] = avg_batch_loss
-                    self.history['axes']['validation']['step_id'].append(steps)
-                    print(avg_batch_loss, len(self.history['axes']['validation']['step_id']))
-                    print(self.history['loss']['validation']['step'])
-
+                self._update_loss_batch(split, epoch_id, avg_batch_loss, steps, collect_time_series_every_n_steps)
 
 
                 if self.metrics:
                     _start_compute_metric_time = time.time()
                     metrics_output_dict = self.compute_metrics(model_output_dict)
-                    time_series_output_dict = metrics_output_dict.get('time_series', None)
-                    instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
-                    self._update_time_series_history(time_series_output_dict, 'validation',
-                                                     collect_time_series_every_n_steps, steps, epoch_id)
-                    self._update_instance_metrics_history(instance_metrics_output_dict, 'validation', epoch_id)
-
                     _end_compute_metric_time = time.time()
                     test_metadata['compute_metrics_time'] = _end_compute_metric_time - _start_compute_metric_time
 
+                    self._update_metrics_batch(split, metrics_output_dict, steps, epoch_id, collect_time_series_every_n_steps)
 
-
-                    self.compute_metrics(model_output_dict)
 
                 del model_output_dict
                 gc.collect()
                 torch.cuda.empty_cache()
+
+                self._log_batch_complete(verbose, batch_id, avg_batch_loss, test_metadata)
+
                 steps += 1
                 if self.debug:
                     break
 
-        self.history['loss']['validation']['epoch'][epoch_id] /= (batch_id + 1)
-
-        self._update_metric_time_series_history_epoch('validation', batch_id, epoch_id, collect_time_series_every_n_steps)
+        self._update_loss_history_epoch(split, batch_id, epoch_id, collect_time_series_every_n_steps)
+        self._update_metric_time_series_history_epoch(split, batch_id, epoch_id, collect_time_series_every_n_steps)
 
     def get_metric_map(self):
         # TODO this has to change for multi task, based on the metrics!
@@ -363,6 +353,25 @@ class BaseTrainer:
         # the question now becomes, will you even need metadata?
 
         return batch
+    def _initialize_loss_history(self, split, num_epochs, num_steps, collect_time_series_every_n_steps):
+        self.history['loss'][split] = self._create_empty_time_series_dict(
+            num_epochs=num_epochs,
+            num_steps=num_steps
+        )
+        if self.debug:
+            logger.debug(f'Initialized <{split}> loss history')
+        if collect_time_series_every_n_steps:
+            self.history['axes'][split] = dict(step_id=[])
+            if self.debug:
+                logger.debug(f'Initialized <{split}> loss history with step_id')
+
+    def _update_loss_history_epoch(self, split, batch_id, epoch_id, collect_time_series_every_n_steps,
+                                          is_train=False):
+        self.history['loss'][split]['epoch'][epoch_id] /= (batch_id + 1)
+        if collect_time_series_every_n_steps:
+            self.history['loss'][split]['epoch_step_ids'][epoch_id] = (epoch_id + 1) * (batch_id + 1) - 1
+            if is_train:
+                self.history['axes']['epoch_step_ids'].append((epoch_id + 1) * (batch_id + 1) - 1)
 
     def compute_metrics(self, model_output_dict):
         # TODO may need to re-think data structure. Need to think of an intelligent way of doing this automatically....
@@ -525,100 +534,3 @@ def _call_huggingface_model(model, inputs, targets, **kwargs):
         attention_mask=inputs['attention_mask'],
     )
     return output_dict
-
-def train(model, optimizer, train_loader, epochs, val_loader=[], verbose=1, metrics=[]):
-
-    for epoch in range(epochs):
-        model.train()
-        start_epoch_message = f'EPOCH {epoch + 1} STARTED'
-        print(start_epoch_message)
-        print(f'{"-" * len(start_epoch_message)}')
-        start_epoch = time.time()
-
-        start_load = time.time()
-        training_loss = 0
-
-        for i, (inputs, targets) in enumerate(train_loader):
-            start_train = time.time()
-            inputs = move_to_device(inputs, DEVICE)
-            targets = move_to_device(targets, DEVICE)
-
-            optimizer.zero_grad()
-
-            # TODO need to refactor this to be flexible for any input/output pair. Output should be a dict, input should be inputs, targets
-            # need to think about case where you have over/under defined inputs and targets. Also move_to_device should be smart enough to know which items to tag as GPU or not.
-            # by default should move everything to GPU, unless there is an 'ignore' tag! Think about how to do this.
-            loss, outputs = model(
-                labels=targets,
-                input_ids=inputs['input_ids'],
-                attention_mask=inputs['attention_mask'],
-                return_dict=False
-            )
-            gpu_util = 'NO GPU' if DEVICE == 'cpu' else get_gpu_utilization()
-            training_loss += loss.item()
-
-            # backward pass
-
-            # torch.nn.utils.clip_grad_norm_(
-            #    parameters=model.parameters(), #max_norm=MAX_NORM
-            # )
-
-            loss.backward()
-            optimizer.step()
-
-            # metrics
-            for metric in metrics:
-                score = metric(outputs, targets)
-                scores['scores'][metric.__class__.__name__].append(score.item())
-
-            confidence = update_confidence(confidence, epoch, inputs, outputs, targets)
-            del targets, inputs, loss, outputs
-            gc.collect()
-            torch.cuda.empty_cache()
-
-            end_train = time.time()
-
-            if verbose > 1:
-                print(
-                    f'Batch {i + 1} complete. '
-                    f'Time taken: load({start_train - start_load:.3g}),'
-                    f'train({end_train - start_train:.3g}),'
-                    f'total({end_train - start_load:.3g}). '
-                    f'GPU util. after train: {gpu_util}. '
-                    f'Metrics: {" ".join([f"{metric_name}({score_list[-1]:.3g})" for metric_name, score_list in scores.get("scores", {}).items()])}'
-                )
-            start_load = time.time()
-            break
-
-        for metric in metrics:
-            score = scores['scores'][metric.__class__.__name__][:i + 1]
-            avg_score = sum(score) / len(score)
-            scores['epoch_scores'][metric.__class__.__name__].append(avg_score)
-            scores['epoch_batch_ids'][metric.__class__.__name__].append(i)
-
-        print_message = f'Epoch {epoch + 1}/{epochs} complete. ' \
-                        f'Time taken: {start_load - start_epoch:.3g}. ' \
-                        f'Loss: {training_loss / (i + 1): .3g}. ' \
-                        f'Metrics: {" ".join([f"{metric_name}({score_list[-1]:.3g})" for metric_name, score_list in scores.get("epoch_scores", {}).items()])}'
-
-        if verbose:
-            print(f'{"-" * len(print_message)}')
-            print(print_message)
-            print(f'{"-" * len(print_message)}')
-
-        # if epoch % save_freq == 0:
-        #    encoded_model_name = encode_model_name(model_name, epoch+1)
-        #    save_path = f'models/{encoded_model_name}'
-        #    model.save_pretrained(save_path)
-        #    print(f'Model saved at epoch {epoch+1} at: {save_path}')
-    var, mean = torch.var_mean(confidence, dim=1, unbiased=False)
-    metadata[lang] = {'var': var.to('cpu'), 'mean': mean.to('cpu')}
-
-    del var, mean, confidence, model, optimizer
-    gc.collect()
-    torch.cuda.empty_cache()
-
-def test():
-    pass
-
-metadata = {}

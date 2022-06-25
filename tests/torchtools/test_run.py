@@ -658,10 +658,13 @@ class TestBaseTrainer(unittest.TestCase):
         epochs = 10
         trainer.train(train_loader, epochs, val_loader, verbose=2, collect_time_series_every_n_steps=2)
 
+        trainer.test(val_loader, collect_time_series_every_n_steps=1)
 
 
         # plot histories
         history = trainer.history
+        print(history)
+
         import matplotlib.pyplot as plt
         # TODO examine the step scores, why do they look dodgy?
 
@@ -678,6 +681,19 @@ class TestBaseTrainer(unittest.TestCase):
         plt.plot(history['axes']['epoch_step_ids'], history['metrics']['time_series'][0]['validation']['epoch'], '.')
 
         plt.show()
+
+
+        plt.plot(
+            history['axes']['test']['step_id'],
+            history['loss']['test']['step'])
+
+        plt.show()
+
+        plt.plot(history['axes']['test']['step_id'], history['metrics']['time_series'][0]['test']['step'])
+
+        plt.show()
+
+
 
         '''
         plt.plot(range(len(history['metrics']['time_series'][0]['train']['epoch'])), history['metrics']['time_series'][0]['train']['epoch'], '.')
