@@ -67,6 +67,7 @@ class BaseTrainer:
 
         # initialize training parameters and history collection
         logger.info('Initializing training...')
+        self.model.to(DEVICE)
         # initialize global axes collection
         self.history['axes'] = dict(epoch_step_ids=[])  # saves the step_id at which epoch history calculated
 
