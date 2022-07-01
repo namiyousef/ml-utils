@@ -8,20 +8,13 @@ import time
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-# create console handler and set level to debug
-ch = logging.StreamHandler()
+ch = logging.StreamHandler()  # create console handler and set level to debug
 ch.setLevel(logging.DEBUG)
-# create formatter
-date_format = '%Y-%m-%d %H:%M:%S'
+date_format = '%Y-%m-%d %H:%M:%S'  # create formatter
 formatter = logging.Formatter('%(asctime)s:%(name)s:%(levelname)s:%(message)s', datefmt=date_format)
-# add formatter to ch
-ch.setFormatter(formatter)
-# add ch to logger
-logger.addHandler(ch)
+ch.setFormatter(formatter)  # add formatter to ch
+logger.addHandler(ch)  # add ch to logger
 
-
-def call_model():
-    pass
 
 # in terms of storage, we want the same plotting capability
 # so for a multi task problem, we will require the metrics we given as a dict with lists for each task, but ultimately in terms of storage they will be the same. The only difference will be that
@@ -51,100 +44,6 @@ class BaseTrainer:
             metrics_dict = self._initialize_metrics_dict()
             self.history['metrics'] = metrics_dict
 
-
-    # verbose = 0, only shows warnings and errors
-    # verbose = 1, shows info at epoch level
-    # verbose = 2, shows info at batch level
-    # debug = True, shows the times as well. Note: need to think of replacing the break clause for the debug!
-    # design choice: we don't specify any data related parameters here. The choice is left to the user to define them according to their dataset
-    # TODO need to think about stratification
-
-    def _update_time_series_history(self, time_series_output_dict, split, collect_time_series_every_n_steps, step,
-                                    epoch_id):
-        if time_series_output_dict:
-            for metric_id, metric_score in time_series_output_dict.items():
-                self.history['metrics']['time_series'][metric_id][split]['epoch'][epoch_id] += metric_score
-                if collect_time_series_every_n_steps and not step % collect_time_series_every_n_steps:
-                    step_id = step // collect_time_series_every_n_steps
-
-                    self.history['metrics']['time_series'][metric_id][split]['step'][step_id] = metric_score
-
-
-    # TODO need to use to('cpu') and detach()!
-    # TODO need to remove gradient computation for metrics
-    def _update_instance_metrics_history(self, instance_merics_output_dict, split, epoch_id, collect_instance_metrics_every_n_steps=None, data_loader=None, include_current=True):
-        if collect_instance_metrics_every_n_steps:
-            raise NotImplementedError('No support for instance metric collection at arbitrary steps')
-        for metric_id, (instance_ids, instance_scores) in instance_merics_output_dict.items():
-            self.history['metrics']['instance_metrics'][metric_id][split][instance_ids, epoch_id] = instance_scores
-
-
-
-    def _update_metric_time_series_history_epoch(self, split, batch_id, epoch_id, collect_time_series_every_n_steps):
-        for metric_id, metric_dict in self.history['metrics']['time_series'].items():
-            metric_dict[split]['epoch'][epoch_id] /= (batch_id + 1)
-
-
-
-    def _log_batch_complete(self, verbose, batch_id, avg_batch_loss, metadata):
-        if verbose > 1:
-            logger.info({"msg": f"Batch {batch_id + 1} complete", "loss": avg_batch_loss})
-            if self.debug:
-                logger.debug(
-                    {"msg": f"Batch {batch_id + 1} metadata", **{k: f'{v:.3g}' for k, v in metadata.items()}}
-                )
-
-    def _log_epoch_complete(self, verbose, split, epoch_id):
-        if verbose > 0:
-            logger.info({"msg": f"Epoch {epoch_id + 1} of split <{split}> complete"})
-            if self.debug:
-                logger.debug(
-                    {"msg": f"Epoch {epoch_id + 1} metadata", }
-                )
-
-    def _initialize_loss_history(self, split, num_epochs, num_steps, collect_time_series_every_n_steps):
-        self.history['loss'][split] = self._create_empty_time_series_dict(
-            num_epochs=num_epochs,
-            num_steps=num_steps
-        )
-        if self.debug:
-            logger.debug(f'Initialized <{split}> loss history')
-        if collect_time_series_every_n_steps:
-            self.history['axes'][split] = dict(step_id=[])
-            if self.debug:
-                logger.debug(f'Initialized <{split}> loss history with step_id')
-
-    def _initialize_metrics_store(self, split, num_epochs, num_steps, num_instances):
-        self._initialize_time_series_store(split,
-                                           num_epochs=num_epochs,
-                                           num_steps=num_steps
-                                           )
-        self._initialize_instance_metrics_store(split,
-                                                num_instances=num_instances,
-                                                num_features=num_epochs
-                                                )
-        if self.debug:
-            logger.debug(f'Initialized metrics score for <{split}>')
-
-    def _update_loss_batch(self, split, epoch_id, avg_batch_loss, steps, collect_time_series_every_n_steps):
-
-        self.history['loss'][split]['epoch'][epoch_id] += avg_batch_loss
-
-        if collect_time_series_every_n_steps and not steps % collect_time_series_every_n_steps:
-            step_id = steps // collect_time_series_every_n_steps
-            self.history['loss'][split]['step'][
-                step_id] = avg_batch_loss  # TODO see if failure occurs because of diff devices here
-            self.history['axes'][split]['step_id'].append(steps)
-
-    def _update_metrics_batch(self, split, metrics_output_dict, steps, epoch_id, collect_time_series_every_n_steps):
-        time_series_output_dict = metrics_output_dict.get('time_series', None)
-        instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
-        self._update_time_series_history(
-            time_series_output_dict, split, collect_time_series_every_n_steps, steps, epoch_id)
-        self._update_instance_metrics_history(
-            instance_metrics_output_dict, split, epoch_id)
-
-
     def train(self,
               train_loader,
               epochs,
@@ -152,21 +51,36 @@ class BaseTrainer:
               verbose=0,
               epoch_start_id=0,
               collect_time_series_every_n_steps=None,
+              break_after_n_steps=0 # TODO update metric and loss initialisation dicts to reflect this change
               ):
-        logger.info('Initializing training...')
-        # initialize global axes collection
-        self.history['axes'] = dict(epoch_step_ids=[])
+        """Function for training a model
+
+        :param train_loader: train data loader
+        :param epochs: number of epochs to train model for
+        :param val_loader: validation data loader, if any
+        :param verbose: verbosity level. 0 - only shows warnings and errors, 1 - shows info every epoch, 2 - shows info every batch (if debug set to True, then shows time elapsed and GPU utilisation as well)
+        :param epoch_start_id: epoch at which to start training
+        :param collect_time_series_every_n_steps: frequency of time series collection
+        :param break_after_n_steps: if debug set to True, then will break training/validation loop after n steps
+        :return:
+        """
 
         # initialize training parameters and history collection
+        logger.info('Initializing training...')
+        # initialize global axes collection
+        self.history['axes'] = dict(epoch_step_ids=[])  # saves the step_id at which epoch history calculated
+
+        # get training parameters
         _num_train_samples, _num_train_steps, _num_train_collect_steps = self._initialize_train_parameters(
             train_loader, epochs, collect_time_series_every_n_steps
         )
+
+        # update history data structure
         self._initialize_loss_history('train', epochs, _num_train_collect_steps, collect_time_series_every_n_steps)
 
         if self.metrics:
-            self._initialize_metrics_store('train', epochs, _num_train_collect_steps, _num_train_samples)
 
-        # TODO debug mode breaks model (in terms of plotting, need to make more robust)
+            self._initialize_metrics_store('train', epochs, _num_train_collect_steps, _num_train_samples)
 
         if val_loader:
             _num_validation_samples, _num_validation_steps, _collect_val_time_series_every_n_steps = self._initialize_val_parameters(
@@ -175,14 +89,20 @@ class BaseTrainer:
                 num_train_steps=_num_train_steps,
                 num_epochs=epochs
             )
-            self._initialize_loss_history('validation', epochs, _num_train_collect_steps, _collect_val_time_series_every_n_steps)
+            self._initialize_loss_history('validation', epochs, _num_train_collect_steps,
+                                          _collect_val_time_series_every_n_steps)
+
 
             if self.metrics:
-                self._initialize_metrics_store('validation', epochs, _num_train_collect_steps, _num_validation_samples)
-        
-        steps = 0
+                self._initialize_metrics_store('validation', epochs, _num_train_collect_steps,
+                                               _num_validation_samples)
+        if self.debug:
+            logger.debug(f'Training initialization complete. Metrics:{bool(self.metrics)}. Validation:{bool(val_loader)}. Full history dict: {self.history}')
+
+
+        steps = 0  # counter to count the number of steps
         for epoch_id in range(epoch_start_id, epochs):
-            training_metadata = {}
+            training_metadata = {}  # to store in-train metrics, e.g. time taken
 
             if verbose > 0:
                 logger.info(f'Starting training for Epoch {epoch_id+1}...')
@@ -194,7 +114,6 @@ class BaseTrainer:
 
                 batch = self.prepare_batch(batch)
 
-                # TODO send batch_metadata to GPU, also think about how to choose which items to send and which not to
                 # can probably change this to preprocess gradient, then can have process gradient!
                 self.optimizer.zero_grad()
 
@@ -219,7 +138,6 @@ class BaseTrainer:
 
 
 
-                # TODO metric calculation and storage in metadata
                 # TODO metric calculation for gradient??
                 _start_optimize_time = time.time()
                 self.process_gradient() # what if process gradient requires inputs, targets, metadata, even the loss value? e.g. things that aren't stored in the model, how we will pass that in?
@@ -315,6 +233,56 @@ class BaseTrainer:
         self._update_loss_history_epoch(split, batch_id, epoch_id, collect_time_series_every_n_steps)
         self._update_metric_time_series_history_epoch(split, batch_id, epoch_id, collect_time_series_every_n_steps)
 
+        # TODO need to think about stratification
+
+    def _initialize_loss_history(self, split, num_epochs, num_steps, collect_time_series_every_n_steps):
+        self.history['loss'][split] = self._create_empty_time_series_dict(
+            num_epochs=num_epochs,
+            num_steps=num_steps
+        )
+        if self.debug:
+            logger.debug(f'Initialized <{split}> loss history')
+        if collect_time_series_every_n_steps:
+            self.history['axes'][split] = dict(step_id=[])
+            if self.debug:
+                logger.debug(f'Initialized <{split}> loss history with step_id')
+
+    def _initialize_metrics_store(self, split, num_epochs, num_steps, num_instances):
+        self._initialize_time_series_store(split,
+                                           num_epochs=num_epochs,
+                                           num_steps=num_steps
+                                           )
+        self._initialize_instance_metrics_store(split,
+                                                num_instances=num_instances,
+                                                num_features=num_epochs
+                                                )
+        if self.debug:
+            logger.debug(f'Initialized metrics score for <{split}>')
+
+
+    def _update_time_series_history(self, time_series_output_dict, split, collect_time_series_every_n_steps, step,
+                                    epoch_id):
+        if time_series_output_dict:
+            for metric_id, metric_score in time_series_output_dict.items():
+                self.history['metrics']['time_series'][metric_id][split]['epoch'][epoch_id] += metric_score
+                if collect_time_series_every_n_steps and not step % collect_time_series_every_n_steps:
+                    step_id = step // collect_time_series_every_n_steps
+                    self.history['metrics']['time_series'][metric_id][split]['step'][step_id] = metric_score
+
+    def _update_metric_time_series_history_epoch(self, split, batch_id, epoch_id, collect_time_series_every_n_steps):
+        for metric_id, metric_dict in self.history['metrics']['time_series'].items():
+            metric_dict[split]['epoch'][epoch_id] /= (batch_id + 1)
+
+        # TODO need to use to('cpu') and detach()!
+        # TODO need to remove gradient computation for metrics
+
+    def _update_instance_metrics_history(self, instance_merics_output_dict, split, epoch_id,
+                                         collect_instance_metrics_every_n_steps=None, data_loader=None,
+                                         include_current=True):
+        if collect_instance_metrics_every_n_steps:
+            raise NotImplementedError('No support for instance metric collection at arbitrary steps')
+        for metric_id, (instance_ids, instance_scores) in instance_merics_output_dict.items():
+            self.history['metrics']['instance_metrics'][metric_id][split][instance_ids, epoch_id] = instance_scores
     def get_metric_map(self):
         # TODO this has to change for multi task, based on the metrics!
         metric_map = {i: metric for i, metric in enumerate(self.metrics)}
@@ -330,6 +298,23 @@ class BaseTrainer:
             metrics_dict['instance_metrics'] = instance_metrics_params
         return metrics_dict
 
+    def _update_loss_batch(self, split, epoch_id, avg_batch_loss, steps, collect_time_series_every_n_steps):
+
+        self.history['loss'][split]['epoch'][epoch_id] += avg_batch_loss
+
+        if collect_time_series_every_n_steps and not steps % collect_time_series_every_n_steps:
+            step_id = steps // collect_time_series_every_n_steps
+            self.history['loss'][split]['step'][
+                step_id] = avg_batch_loss  # TODO see if failure occurs because of diff devices here
+            self.history['axes'][split]['step_id'].append(steps)
+
+    def _update_metrics_batch(self, split, metrics_output_dict, steps, epoch_id, collect_time_series_every_n_steps):
+        time_series_output_dict = metrics_output_dict.get('time_series', None)
+        instance_metrics_output_dict = metrics_output_dict.get('instance_metrics', None)
+        self._update_time_series_history(
+            time_series_output_dict, split, collect_time_series_every_n_steps, steps, epoch_id)
+        self._update_instance_metrics_history(
+            instance_metrics_output_dict, split, epoch_id)
     def save(self):
         pass
 
@@ -344,11 +329,10 @@ class BaseTrainer:
         pass
 
     def prepare_batch(self, batch):
-        batch['inputs'] = move_to_device(batch['inputs'])
-        batch['targets'] = move_to_device(batch['targets'])
+        batch['inputs'] = move_to_device(batch['inputs'], DEVICE)
+        batch['targets'] = move_to_device(batch['targets'], DEVICE)
 
-        # what is the purpose of metadata?
-        #batch['metadata'] = move_to_device()
+        # what is the purpose of metadata? # TODO send batch_metadata to GPU, also think about how to choose which items to send and which not to
         # these are things that you explicitly don't want on the GPU. Everything else should go within inputs/targets
         # the question now becomes, will you even need metadata?
 
@@ -463,12 +447,6 @@ class BaseTrainer:
         }
         return params
 
-    def _initialize_history_dict(self, split, num_steps=None):
-        self.history['loss'][split] = self._create_empty_time_series_dict(collect_time_series_every_n_steps=collect_time_series_every_n_steps)
-        if self.metrics:
-            for metric_id, metric in enumerate(self.metrics):
-                self.history['metrics'][metric_id][split] = self._create_empty_time_series_dict(
-                    collect_time_series_every_n_steps=collect_time_series_every_n_steps)
         # TODO logging
         # TODO for multitask all we will do is add a wrapper that uses this, and then flatten it
 
@@ -511,6 +489,24 @@ class BaseTrainer:
             _updated_n_steps = int(collect_time_series_every_n_steps * val_to_train_ratio)
             collect_time_series_every_n_steps = max(1, _updated_n_steps)
         return _num_validation_samples, _num_validation_steps, collect_time_series_every_n_steps
+
+    def _log_batch_complete(self, verbose, batch_id, avg_batch_loss, metadata):
+        if verbose > 1:
+            logger.info({"msg": f"Batch {batch_id + 1} complete", "loss": avg_batch_loss})
+            if self.debug:
+                logger.debug(
+                    {"msg": f"Batch {batch_id + 1} metadata", **{k: f'{v:.3g}' for k, v in metadata.items()}}
+                )
+
+    def _log_epoch_complete(self, verbose, split, epoch_id):
+        if verbose > 0:
+            logger.info({"msg": f"Epoch {epoch_id + 1} of split <{split}> complete"})
+            if self.debug:
+                logger.debug(
+                    {"msg": f"Epoch {epoch_id + 1} metadata", }
+                )
+
+
 def HuggingFaceTrainer(BaseTrainer):
     def __init__():
         super().__init__()
