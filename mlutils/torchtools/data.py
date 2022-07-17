@@ -47,3 +47,19 @@ class CurriculumSampler(Sampler):
             for index in range(int(self.n_batches) * self.batch_size, self.dataset_length):
                 yield self.difficulty_indices[index]
 
+def get_curriculum_dataloader(dataset, difficulty_indices, batch_size, drop_last=False, shuffle=False):
+    """
+    Returns DataLoader for CurriculumDataset
+    :param dataset:
+    :param difficulty_indices:
+    :param batch_size:
+    :param drop_last:
+    :param shuffle:
+    :return:
+    """
+    return DataLoader(
+        dataset, batch_size=None,  # must be disabled when using samplers
+        sampler=BatchSampler(
+            CurriculumSampler(dataset, batch_size, difficulty_indices, shuffle),
+            batch_size=batch_size, drop_last=drop_last)
+    )
