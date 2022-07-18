@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='ml-dev-tools',
-    version='0.0.3',
+    version='0.0.4',
     description='Useful functions for Machine Learning',
     author='Yousef Nami',
     author_email='namiyousef@hotmail.com',
