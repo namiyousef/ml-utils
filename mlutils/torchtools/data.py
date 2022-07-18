@@ -31,9 +31,16 @@ class CurriculumSampler(Sampler):
         self.batch_size = batch_size
         self.n_batches = self.dataset_length / self.batch_size
 
-        if shuffle:
+        if isinstance(shuffle, bool):
+            if shuffle:
+                print('We are shuffling with no seed')
+                for i in range(len(difficulty_indices)):
+                    random.shuffle(difficulty_indices[i])
+        elif isinstance(shuffle, int):
+            print('we are shuffling with seed')
             for i in range(len(difficulty_indices)):
-                random.shuffle(difficulty_indices[i])
+                random.Random(shuffle).shuffle(difficulty_indices[i])
+
         self.difficulty_indices = [index for indices in difficulty_indices for index in indices]
 
     def __len__(self):
@@ -61,7 +68,7 @@ def get_curriculum_dataloader(dataset, difficulty_indices, batch_size, drop_last
     return DataLoader(
         dataset, batch_size=None,  # must be disabled when using samplers
         sampler=BatchSampler(
-            CurriculumSampler(dataset, batch_size, difficulty_indices, shuffle),
+            CurriculumSampler(dataset, batch_size, difficulty_indices, shuffle=shuffle),
             batch_size=batch_size, drop_last=drop_last)
     )
 
