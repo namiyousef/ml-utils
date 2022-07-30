@@ -200,3 +200,31 @@ class ProbabilisticCurriculumSampler(Sampler):
                 yield visible_data[index]
 
         self.shard_id += 1
+
+
+def get_probabilistic_curriculum_dataloader(
+        dataset,
+        difficulty_indices,
+        num_phases_after_curriculum=2,
+        sampling_weights=None,
+        intra_shard_shuffle=True,
+        inter_shard_shuffle=True,
+        batch_size=32,
+        drop_last=False
+):
+    return DataLoader(
+        dataset, batch_size=None,  # must be disabled when using samplers
+        sampler=BatchSampler(
+            ProbabilisticCurriculumSampler(
+                dataset,
+                batch_size,
+                difficulty_indices,
+                num_phases_after_curriculum,
+                sampling_weights,
+                intra_shard_shuffle,
+                inter_shard_shuffle
+            ),
+            batch_size=batch_size,
+            drop_last=drop_last
+        )
+    )
