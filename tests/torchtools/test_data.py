@@ -1,7 +1,7 @@
 import unittest
 import torch
 import random
-
+from copy import deepcopy
 
 from mlutils.torchtools.data import get_curriculum_dataloader, get_probabilistic_curriculum_dataloader
 
@@ -103,15 +103,19 @@ class TestData(unittest.TestCase):
             inter_shard_shuffle=False
         )
 
+        copy_indices = deepcopy(difficulty_indices)
         shards = []
         for epoch in range(epochs):
-            if epoch < len(difficulty_indices):
-                shards.append(difficulty_indices[epoch])
-                for i in range(len(shards))
-                random.Random(seed).shuffle(difficulty_indices_shuffled[i])  # need to run twice...
+            print(f'Phase: {epoch}')
+            if epoch < len(copy_indices):
+                shards.append(copy_indices[epoch])
+                for i in range(len(shards)):
+                    random.Random(seed).shuffle(shards[i])
 
-                expected_visible_data += difficulty_indices[epoch]
+                expected_visible_data = [index for shard in shards for index in shard]
             else:
+                expected_visible_data = [index for shard in shards for index in shard]
+                random.Random(seed).shuffle(expected_visible_data)
             for i, batch in enumerate(loader):
                 instance_ids = batch['instance_ids']
                 expected_instance_ids = torch.tensor([
