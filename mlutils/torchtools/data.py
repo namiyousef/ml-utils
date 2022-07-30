@@ -129,7 +129,28 @@ def get_random_batch_dataloader(dataset, batch_size=32, drop_last=False):
     )
 
 class ProbabilisticCurriculumSampler(Sampler):
+    """Samplinh class to generate curriculum learning samplers from a given dataset and associated difficulty indices.
+    This is largely based on the following paper: https://arxiv.org/pdf/1811.00739.pdf.
+    The implementation at the moment is "default".
+    A caveat is in our case, we don't have any further bucketing after the shards are created. Instead we sample
+    uniformly from each shard.
 
+    :param dataset: dataset you want to batch
+    :type dataset: torch.utils.data.Dataset
+    :param batch_size: batch size
+    :type batch_size: int
+    :param difficulty_indices: ids of instances ordered by difficulty and grouped into shards
+    :type difficulty_indices: List[List[int]]
+    :param num_phases_after_curriculum: number of epochs to train for after
+    :type num_phases_after_curriculum: int
+    :param intra_shard_shuffle: flag to enable shuffling within each shard at each phase (including after curriculum)
+    :type intra_shard_shuffle: bool or int (for seed)
+    :param inter_shard_shuffle: flag to enable shuffling of shards within each curriculum phase
+    :type inter_shard_shuffle: bool or int (for seed)
+
+    :returns: generator object
+
+    """
     def __init__(
             self,
             dataset,
@@ -140,6 +161,7 @@ class ProbabilisticCurriculumSampler(Sampler):
             intra_shard_shuffle=True,
             inter_shard_shuffle=True
     ):
+        warnings.warn('', UserWarning, stacklevel=2)
         # TODO shuffle/no shuffle?
         # TODO strategy?
 
@@ -183,6 +205,8 @@ class ProbabilisticCurriculumSampler(Sampler):
 
 
         else:
+            # behaviour: we are flattening based on the shards as opposed to the last order of visible data
+            # does this matter at all? In the case of no shuffle maybe?
             visible_data = [index for indices in self.shards for index in indices]
             if isinstance(self.intra_shard_shuffle, bool):
                 if self.intra_shard_shuffle:
