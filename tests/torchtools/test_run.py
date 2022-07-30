@@ -335,7 +335,7 @@ class TestBaseTrainer(unittest.TestCase):
         collect_time_series_every_n_steps = None
 
         _num_val_samples, _num_val_steps, _num_val_collect_steps = trainer._initialize_val_parameters(
-            val_loader, collect_time_series_every_n_steps=collect_time_series_every_n_steps, num_train_steps=None
+            val_loader, collect_time_series_every_n_steps=collect_time_series_every_n_steps, num_train_steps=None, num_epochs=1
 
         )
 
@@ -352,7 +352,7 @@ class TestBaseTrainer(unittest.TestCase):
         collect_time_series_every_n_steps = 10 # this is for train
 
         _num_val_samples, _num_val_steps, collect_val_ts_every_n_steps = trainer._initialize_val_parameters(
-            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps
+            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps, num_epochs=1
         )
 
         expected_val_samples = len(val_set)
@@ -368,7 +368,7 @@ class TestBaseTrainer(unittest.TestCase):
         collect_time_series_every_n_steps = 10  # this is for train
 
         _num_val_samples, _num_val_steps, collect_val_ts_every_n_steps = trainer._initialize_val_parameters(
-            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps
+            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps, num_epochs=1
         )
 
         expected_val_samples = len(val_set)
@@ -383,14 +383,13 @@ class TestBaseTrainer(unittest.TestCase):
         num_train_steps = 10
         collect_time_series_every_n_steps = 10  # this is for train
         _num_val_samples, _num_val_steps, collect_val_ts_every_n_steps = trainer._initialize_val_parameters(
-            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps
+            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps, num_epochs=1
         )
 
         expected_val_samples = len(val_set)
         expected_val_steps = len(val_loader)
-        expected_val_ts_every_n_steps = 14
+        expected_val_ts_every_n_steps = 13
         # TODO double check this test! See if the output plots match what you expect
-        print(expected_val_ts_every_n_steps, collect_val_ts_every_n_steps)
         assert _num_val_samples == expected_val_samples
         assert _num_val_steps == expected_val_steps
         assert collect_val_ts_every_n_steps == expected_val_ts_every_n_steps
@@ -400,12 +399,13 @@ class TestBaseTrainer(unittest.TestCase):
         collect_time_series_every_n_steps = 1  # this is for train
 
         _num_val_samples, _num_val_steps, collect_val_ts_every_n_steps = trainer._initialize_val_parameters(
-            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps
+            val_loader, collect_time_series_every_n_steps, num_train_steps=num_train_steps, num_epochs=1
         )
 
         expected_val_samples = len(val_set)
         expected_val_steps = len(val_loader)
-        expected_val_ts_every_n_steps = 2  # this should be correct
+        expected_val_ts_every_n_steps = 1  # this should be correct
+
         # TODO not sure if this is even correct..
         assert _num_val_samples == expected_val_samples
         assert _num_val_steps == expected_val_steps
