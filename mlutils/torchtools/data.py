@@ -1,6 +1,7 @@
 from torch.utils.data import DataLoader, BatchSampler, Sampler
 import random
 import torch
+import warnings
 
 class CurriculumSampler(Sampler):
     """Sampling class to create curriculum learning batches from a given dataset and associated diffiulty indices
@@ -212,6 +213,9 @@ def get_probabilistic_curriculum_dataloader(
         batch_size=32,
         drop_last=False
 ):
+    assert num_phases_after_curriculum >= 0, 'num_phases_after_curriculum must be greater than or equal to 0'
+    if sampling_weights:
+        warnings.warn('You have provided sampling weights as an argument but this is currently ignored', UserWarning, stacklevel=2)
     return DataLoader(
         dataset, batch_size=None,  # must be disabled when using samplers
         sampler=BatchSampler(
