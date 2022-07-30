@@ -129,11 +129,40 @@ def get_random_batch_dataloader(dataset, batch_size=32, drop_last=False):
     )
 
 class ProbabilisticCurriculumSampler(Sampler):
-    """Samplinh class to generate curriculum learning samplers from a given dataset and associated difficulty indices.
+    """Sampling class to generate curriculum learning samplers from a given dataset and associated difficulty indices.
     This is largely based on the following paper: https://arxiv.org/pdf/1811.00739.pdf.
     The implementation at the moment is "default".
     A caveat is in our case, we don't have any further bucketing after the shards are created. Instead we sample
     uniformly from each shard.
+    Consider difficulty_indices [[9, 8, 7], [6, 5, 4], [3, 2, 1], [0]] and batch_size=2
+    In the case of no shuffle entirely, this is simply a batch sampler, thus:
+    batch 0: [9, 8]
+    batch 1: [7] etc..
+
+    In the case of intra_shuffle, at each "phase" we will have each shard shuffled, so
+    phase 1: visible data [9, 8, 7] --> shuffled [9, 7, 8]
+    batch 0: [9, 7]
+    batch 1: [8]
+
+    phase 2: visible data [9, 8, 7], [6, 5, 4] --> shuffled [9, 7, 8], [4, 5, 6]
+    batch 0: [9, 8]
+    batch 1: [7, 6]
+    batch 2: [5, 4]
+
+    In the case of inter_shuffle, we simply shuffle the shards before any intra shuffling (if enabled). So if both
+    are on, then:
+
+    phase 1:[9, 8, 7] --> [9, 7, 8]
+    batch 0: [9, 8], batch 1: [7]
+
+    phase 2: [9, 8, 7], [6, 5, 4] --> shuffle shards [6, 5, 4], [9, 8, 7] --> shuffle within shards [4, 5, 6], [9, 7, 8]
+    batch 0: [6, 5]
+    batch 1: [4, 9]
+    batch 2: [8, 7]
+
+    NOTE: this is designed to run with simple training paradigms (e.g. with num_epochs). However, epochs is not always the same
+    as "phase". In this case, number of epochs must be set to be num_shards + num_phases_after_curriculum. This has implications
+    for how some metrics are stored and calculated (e.g. instance metrics) and need to be accounted for elsewhere.
 
     :param dataset: dataset you want to batch
     :type dataset: torch.utils.data.Dataset
@@ -161,7 +190,6 @@ class ProbabilisticCurriculumSampler(Sampler):
             intra_shard_shuffle=True,
             inter_shard_shuffle=True
     ):
-        warnings.warn('', UserWarning, stacklevel=2)
         # TODO shuffle/no shuffle?
         # TODO strategy?
 
