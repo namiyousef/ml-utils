@@ -125,8 +125,69 @@ class TestData(unittest.TestCase):
                 assert (instance_ids == expected_instance_ids).all()
 
         logger.info('Test 3 - test with inter batch shuffling')
+        seed = 0
+        loader = get_probabilistic_curriculum_dataloader(
+            dataset,
+            difficulty_indices,
+            batch_size=self.batch_size,
+            drop_last=False,
+            num_phases_after_curriculum=epochs - len(difficulty_indices),
+            intra_shard_shuffle=False,
+            inter_shard_shuffle=seed
+        )
+
+        copy_indices = deepcopy(difficulty_indices)
+        shards = []
+        for epoch in range(epochs):
+            print(f'Phase: {epoch}')
+            if epoch < len(copy_indices):
+                shards.append(copy_indices[epoch])
+                random.Random(seed).shuffle(shards)
+
+                expected_visible_data = [index for shard in shards for index in shard]
+            else:
+                expected_visible_data = [index for shard in shards for index in shard]
+            for i, batch in enumerate(loader):
+                instance_ids = batch['instance_ids']
+                expected_instance_ids = torch.tensor([
+                    expected_visible_data[j] for j in
+                    range(i * self.batch_size, min((i + 1) * self.batch_size, len(expected_visible_data)))
+                ])
+                assert (instance_ids == expected_instance_ids).all()
 
 
         logger.info('Test 4 - test all shuffling')
 
+        seed = 0
+        loader = get_probabilistic_curriculum_dataloader(
+            dataset,
+            difficulty_indices,
+            batch_size=self.batch_size,
+            drop_last=False,
+            num_phases_after_curriculum=epochs - len(difficulty_indices),
+            intra_shard_shuffle=seed,
+            inter_shard_shuffle=seed
+        )
 
+        copy_indices = deepcopy(difficulty_indices)
+        shards = []
+        for epoch in range(epochs):
+            print(f'Phase: {epoch}')
+            if epoch < len(copy_indices):
+                shards.append(copy_indices[epoch])
+                random.Random(seed).shuffle(shards)
+
+                for i in range(len(shards)):
+                    random.Random(seed).shuffle(shards[i])
+
+                expected_visible_data = [index for shard in shards for index in shard]
+            else:
+                expected_visible_data = [index for shard in shards for index in shard]
+                random.Random(seed).shuffle(expected_visible_data)
+            for i, batch in enumerate(loader):
+                instance_ids = batch['instance_ids']
+                expected_instance_ids = torch.tensor([
+                    expected_visible_data[j] for j in
+                    range(i * self.batch_size, min((i + 1) * self.batch_size, len(expected_visible_data)))
+                ])
+                assert (instance_ids == expected_instance_ids).all()
