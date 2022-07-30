@@ -673,25 +673,25 @@ class TestBaseTrainer(unittest.TestCase):
         plt.plot(history['axes']['epoch_step_ids'], history['loss']['train']['epoch'],'.')
         plt.plot(history['axes']['epoch_step_ids'], history['loss']['validation']['epoch'], '.')
 
-        plt.show()
+        #plt.show()
 
         plt.plot(history['axes']['train']['step_id'], history['metrics']['time_series'][0]['train']['step'])
         plt.plot(history['axes']['validation']['step_id'], history['metrics']['time_series'][0]['validation']['step'])
         plt.plot(history['axes']['epoch_step_ids'], history['metrics']['time_series'][0]['train']['epoch'], '.')
         plt.plot(history['axes']['epoch_step_ids'], history['metrics']['time_series'][0]['validation']['epoch'], '.')
 
-        plt.show()
+        #plt.show()
 
 
         plt.plot(
             history['axes']['test']['step_id'],
             history['loss']['test']['step'])
 
-        plt.show()
+        #plt.show()
 
         plt.plot(history['axes']['test']['step_id'], history['metrics']['time_series'][0]['test']['step'])
 
-        plt.show()
+        #plt.show()
 
 
 
