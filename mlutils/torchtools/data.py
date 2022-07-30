@@ -126,3 +126,77 @@ def get_random_batch_dataloader(dataset, batch_size=32, drop_last=False):
         dataset, batch_size=None,  # must be disabled when using samplers
         sampler=BatchSampler(RandomBatchSampler(dataset, batch_size), batch_size=batch_size, drop_last=drop_last)
     )
+
+class ProbabilisticCurriculumSampler(Sampler):
+
+    def __init__(
+            self,
+            dataset,
+            batch_size,
+            difficulty_indices,
+            num_phases_after_curriculum,
+            sampling_weights,
+            intra_shard_shuffle=True,
+            inter_shard_shuffle=True
+    ):
+        # TODO shuffle/no shuffle?
+        # TODO strategy?
+
+        super().__init__(dataset)
+        self.dataset_length = len(dataset)
+        self.batch_size = batch_size
+        self.num_shards = len(difficulty_indices)
+        self.num_phases_after_curriculum = num_phases_after_curriculum
+        self.shard_id = 0
+        self.shards = []
+        self.visible_data_length = 0
+        self.difficulty_indices = difficulty_indices
+        self.intra_shard_shuffle = intra_shard_shuffle
+        self.inter_shard_shuffle = inter_shard_shuffle
+
+    def __len__(self):
+        return self.batch_size
+
+    def __iter__(self):
+        if self.shard_id < self.num_shards:
+            shard = self.difficulty_indices[self.shard_id]
+            self.shards.append(shard)
+            self.visible_data_length += len(shard)
+
+            if isinstance(self.intra_shard_shuffle, bool):
+                if self.intra_shard_shuffle:
+                    for i in range(len(self.shards)):
+                        random.shuffle(self.shards[i])
+            elif isinstance(self.intra_shard_shuffle, int):
+                for i in range(len(self.shards)):
+                    random.Random(self.intra_shard_shuffle).shuffle(self.shards[i])
+
+            if isinstance(self.inter_shard_shuffle, bool):
+                if self.inter_shard_shuffle:
+                    random.shuffle(self.shards)
+            elif isinstance(self.inter_shard_shuffle, int):
+                random.Random(self.inter_shard_shuffle).shuffle(self.shards)
+
+            self.n_batches = self.visible_data_length / self.batch_size
+            visible_data = [index for indices in self.shards for index in indices]
+
+
+        else:
+            visible_data = [index for indices in self.shards for index in indices]
+            if isinstance(self.intra_shard_shuffle, bool):
+                if self.intra_shard_shuffle:
+                    random.shuffle(visible_data)
+
+
+            elif isinstance(self.intra_shard_shuffle, int):
+                random.Random(self.intra_shard_shuffle).shuffle(visible_data)
+
+        for batch_num in range(int(self.n_batches)):
+            for index in range(batch_num * self.batch_size, (batch_num + 1) * self.batch_size):
+                yield visible_data[index]
+
+        if int(self.n_batches) < self.n_batches:
+            for index in range(int(self.n_batches) * self.batch_size, self.visible_data_length):
+                yield visible_data[index]
+
+        self.shard_id += 1
