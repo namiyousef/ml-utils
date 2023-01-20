@@ -2,6 +2,7 @@ from mlutils.external_apis.config import MICROSOFT_TRANSLATE_URL, MICROSOFT_TRAN
 import requests, uuid
 import logging
 from typing import Tuple, Union, List, Dict, Optional
+from mlutils.external_apis.utils import is_request_valid, add_array_api_parameters
 
 # -- setup logging
 LOGGER = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ formatter = logging.Formatter('%(asctime)s:%(name)s:%(levelname)s:%(message)s', 
 ch.setFormatter(formatter)
 LOGGER.addHandler(ch)
 
+# -- define global variables
 HEADERS = {
     'Ocp-Apim-Subscription-Key': MICROSOFT_TRANSLATE_API_KEY,
     'Ocp-Apim-Subscription-Region': MICROSOFT_TRANSLATE_LOCATION,
@@ -78,17 +80,6 @@ def build_url(url: str, param_name: str, param_value: Union[int, float, str, Lis
             url = f'{url}&{param_name}={param_value_}'
     return url
 
-def is_response_valid(status_code: int) -> bool:
-    """Check if API response is valid
-
-    :param status_code: status code from a HTTP request
-    :return: `True` if status code is success, `False` otherwise
-    """
-    if str(status_code).startswith('2'):
-        return True
-    else:
-        return False
-
 def standardise_request_output(resp: requests.Response) -> Tuple[int, dict]:
     """Standardises the output of an API response
 
@@ -96,11 +87,11 @@ def standardise_request_output(resp: requests.Response) -> Tuple[int, dict]:
     :return: (status_code, response.json() if success call response.text otherwise)
     """
     status_code = resp.status_code
-    if is_response_valid(status_code):
+    if is_request_valid(status_code):
         msg = resp.json()
     else:
         msg = resp.text
-    return status_code, msg
+    return msg, status_code
 
 def _aggregate_translation_by_language(request_outputs):
     aggregated_output = dict(
@@ -146,7 +137,7 @@ def _translate_batch(url, texts, target_languages, translation_dict=dict()):
                         batched_body = [{'text': batched_text} for batched_text in batched_texts]
                         LOGGER.debug(f'Translating batch {batch_id+1}/{n_batches} of text with idx={idx}. Target languages: {target_languages_}')
                         resp = requests.post(url_, headers=HEADERS, json=batched_body)
-                        status_code, msg = standardise_request_output(resp)
+                        msg, status_code = standardise_request_output(resp)
                         _request_outputs.append(dict(status_code=status_code, msg=msg))
                     
                     
@@ -160,13 +151,13 @@ def _translate_batch(url, texts, target_languages, translation_dict=dict()):
             url_ = build_url(url, 'to', target_languages)
             LOGGER.debug(f'Translating texts with idx={batch_idx_key}. Total characters: {total_chars}')
             resp = requests.post(url_, headers=HEADERS, json=batched_body)
-            status_code, msg = standardise_request_output(resp)
+            msg, status_code = standardise_request_output(resp)
             translation_dict[batch_idx_key] = dict(status_code=status_code, msg=msg)
         
     return translation_dict
 
 def cleanup_multiple_requests_output(request_outputs, errors):
-    unsuccess_status_codes = [not is_response_valid(request_output['status_code']) for request_output in request_outputs]
+    unsuccess_status_codes = [not is_request_valid(request_output['status_code']) for request_output in request_outputs]
     if any(unsuccess_status_codes):
         if errors == 'raise':
             raise Exception('Found at least 1 unsuccessful request. Failing all calls.')
@@ -178,15 +169,17 @@ def translate_text_v2(
     text: Union[str, List[str]],
     target_language: Union[str, List[str]],
     source_language: Optional[str] = None,
+    api_version: str = '3.0'
 ) -> Tuple[int, list]:  # TODO change the output type
     """Translates text(s) to target_language(s) using Microsoft translate API v3. The translation process automatically batches the data where possible to avoid hitting the APIs character limit.
 
     :param text: text to be translated. Either single or multiple (stored in a list)
     :param target_language: ISO format of target translation languages
     :param source_language: ISO format of source language. If not provided is inferred by the translator, defaults to None
+    :param api_version: api version to use, defaults to "3.0"
     :return: for successful response, (status_code, [{"translations": [{"text": translated_text_1, "to": lang_1}, ...]}, ...]))        
     """
-    url = f'{MICROSOFT_TRANSLATE_URL}/translate?api-version=3.0'
+    url = f'{MICROSOFT_TRANSLATE_URL}/translate?api-version={api_version}'
     if source_language:
         url = f'{url}&from={source_language}'
 
@@ -214,10 +207,18 @@ def translate_text_v2(
     
     status_code = translation_outputs['status_code']
 
-    return status_code, translated_texts
+    return translated_texts, status_code
 
 
-def translate_text(text, target_language, source_language=None):
+def translate_text(text: Union[str, list], target_language: Union[str, list], source_language: Optional[str] = None, api_version='3.0'):
+    """translates txt using the microsoft translate API
+
+    :param text: _description_
+    :param target_language: _description_
+    :param source_language: _description_, defaults to None
+    :param api_version: _description_, defaults to '3.0'
+    :return: response from API, (translations, status_code) or (response_text, status_code)
+    """
     url = f'{MICROSOFT_TRANSLATE_URL}/translate?api-version=3.0'
 
     if isinstance(target_language, str):
@@ -236,10 +237,12 @@ def translate_text(text, target_language, source_language=None):
 
     resp = requests.post(url, headers=HEADERS, json=body)
 
-    if str(resp.status_code).startswith('2'):
-        return resp.status_code, resp.json()
-    
-    return resp.status_code, resp.text
+    status_code = resp.status_code
+
+    if is_request_valid(status_code):
+        return resp.json(), status_code
+
+    return resp.text, status_code
 
 if __name__ == '__main__':
     print(translate_text('test', 'de'))
