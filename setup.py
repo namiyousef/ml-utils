@@ -7,7 +7,9 @@ setup(
     author='Yousef Nami',
     author_email='namiyousef@hotmail.com',
     url='https://github.com/namiyousef/ml-utils',
-    install_requires=['torch', 'sklearn', 'colab-dev-tools'],
+    install_requires=[
+        'torch', 'sklearn', 'colab-dev-tools', 'requests'
+    ],
     #package_data={}
     packages=find_packages(exclude=('tests*', 'experiments*')),
     license='MIT',
