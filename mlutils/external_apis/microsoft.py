@@ -210,33 +210,36 @@ def translate_text_v2(
     return translated_texts, status_code
 
 
-def translate_text(text: Union[str, list], target_language: Union[str, list], source_language: Optional[str] = None, api_version='3.0'):
+def translate_text(
+    text: Union[str, list],
+    target_language: Union[str, list],
+    source_language: Optional[str] = None,
+    api_version: str = '3.0') -> tuple:
     """translates txt using the microsoft translate API
 
-    :param text: _description_
-    :param target_language: _description_
-    :param source_language: _description_, defaults to None
-    :param api_version: _description_, defaults to '3.0'
-    :return: response from API, (translations, status_code) or (response_text, status_code)
+    :param text: text to be translated. Either single or multiple (stored in a list)
+    :param target_language: ISO format of target translation languages
+    :param source_language: ISO format of source language. If not provided is inferred by the translator, defaults to None
+    :param api_version: api version to use, defaults to "3.0"
+    :return: for successful response, (status_code, [{"translations": [{"text": translated_text_1, "to": lang_1}, ...]}, ...]))        
     """
-    url = f'{MICROSOFT_TRANSLATE_URL}/translate?api-version=3.0'
+
+    url = f'{MICROSOFT_TRANSLATE_URL}/translate?api-version={api_version}'
 
     if isinstance(target_language, str):
-        url = f'{url}&to={target_language}'
-    elif isinstance(target_language, list):
-        for lang in target_language:
-            url = f'{url}&to={lang}'
+        target_language = [target_language]
+    
+    url = add_array_api_parameters(url, param_name='to', param_values=target_language)
 
     if source_language:
         url = f'{url}&from={source_language}'
 
     if isinstance(text, str):
-        body = [{'text': text}]
-    elif isinstance(text, list):
-        body = [{'text': text_} for text_ in text]
+        text = [text]
+    
+    body = [{'text': text_} for text_ in text]
 
     resp = requests.post(url, headers=HEADERS, json=body)
-
     status_code = resp.status_code
 
     if is_request_valid(status_code):
