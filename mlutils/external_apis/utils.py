@@ -10,3 +10,14 @@ def add_array_api_parameters(url: str, param_name: str, param_values: list) -> s
         url = f'{url}&{param_name}={param_value}'
     
     return url
+
+def is_request_valid(status_code: int) -> bool:
+    """checks if request was valid
+
+    :param status_code: status_code from request
+    :return: True if valid, False otherwise
+    """
+    if str(status_code).startswith('2'):
+        return True
+    
+    return False
