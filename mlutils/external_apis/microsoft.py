@@ -26,11 +26,12 @@ CHARACTER_LIMITS = 50000
 
 # impement autobatch_size based on limits
 
-def batch_by_size(sizes: Dict[int, int], limit: int) -> List[Dict[str, Union[int, List[int]]]]:
+def batch_by_size(sizes: Dict[int, int], limit: int, sort_docs: bool = False) -> List[Dict[str, Union[int, List[int]]]]:
     """Given a size mapping such {document_id: size_of_document}, batches documents such that the total size of a batch of documents does not exceed pre-specified limit
 
     :param sizes: mapping that gives document size for each document_id
     :param limit: size limit for each batch
+    :sort_doc: if True sorts `sizes` in descending order
     :return: [{'idx': [ids_for_batch], 'total_size': total_size_of_documents_in_batch}, ...]
 
     Example:
@@ -40,6 +41,8 @@ def batch_by_size(sizes: Dict[int, int], limit: int) -> List[Dict[str, Union[int
         >>> batch_by_size(sizes, limit)
         [{'idx': [0], 'total_size': 17}, {'idx': [1, 2], 'total_size': 8}]
     """
+    if sort_docs:
+        sizes = {key: size for key, size in sorted(sizes.items(), key=lambda x: x[1], reverse=True)}
 
     batched_items = []
     sizes_iter = iter(sizes)
@@ -52,6 +55,8 @@ def batch_by_size(sizes: Dict[int, int], limit: int) -> List[Dict[str, Union[int
             })
         else:
             size = sizes[key]
+            if size > limit:
+                LOGGER.warning(f'Document {key} exceeds max limit size: {size}>{limit}')
             total_size = batched_items[-1]['total_size'] + size
             if total_size > limit:
                 batched_items.append({
@@ -239,6 +244,7 @@ def translate_text(
     
     body = [{'text': text_} for text_ in text]
 
+    LOGGER.info(f'Translating {len(text)} texts to {len(target_language)} languages')
     resp = requests.post(url, headers=HEADERS, json=body)
     status_code = resp.status_code
 
