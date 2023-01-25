@@ -24,6 +24,62 @@ HEADERS = {
 
 CHARACTER_LIMITS = 50000
 
+def batch_by_size_min_buckets(sizes, limit):
+    """Given dictionary of documents and their sizes {doc_id: doc_size}, batch documents such that the total size of each batch <= limit. Algorithm designed to decrease number of batches
+
+    :param sizes: _description_
+    :type sizes: _type_
+    :param limit: _description_
+    :type limit: _type_
+    :return: _description_
+    :rtype: _type_
+    """
+    sizes = {key: size for key, size in sorted(sizes.items(), key=lambda x: x[1], reverse=True)}
+
+    batched_items = []
+    sizes_iter = iter(sizes)
+    key = next(sizes_iter)
+    while key is not None:
+        if not batched_items:
+            batched_items.append({
+                'idx': [key],
+                'total_size': sizes[key]
+            })
+        else:
+            size = sizes[key]
+            if size > limit:
+                LOGGER.warning(f'Document {key} exceeds max limit size: {size}>{limit}')
+                batched_items.append({
+                    'idx': [key],
+                    'total_size': sizes[key]
+                })
+            else:
+                batch_id = -1
+                total_capacity = limit
+                for i, batched_item in enumerate(batched_items):
+                    total_size = batched_item['total_size']
+                    remaining_capacity = total_capacity - total_size - size
+                    if remaining_capacity < 0:
+                        continue
+                    elif remaining_capacity == 0:
+                        batch_id = i
+                    else:
+                        total_capacity = remaining_capacity
+                        batch_id = i
+                
+                if batch_id == -1:
+                    batched_items.append({
+                        'idx': [key],
+                        'total_size': sizes[key]
+                    })
+                else:
+
+                    batched_items[batch_id]['idx'].append(key)
+                    batched_items[batch_id]['total_size'] += sizes[key]
+
+        key = next(sizes_iter, None) 
+    return batched_items
+
 # impement autobatch_size based on limits
 
 def batch_by_size(sizes: Dict[int, int], limit: int, sort_docs: bool = False) -> List[Dict[str, Union[int, List[int]]]]:
