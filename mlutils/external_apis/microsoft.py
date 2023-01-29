@@ -3,6 +3,7 @@ import requests, uuid
 import logging
 from typing import Tuple, Union, List, Dict, Optional
 from mlutils.external_apis.utils import is_request_valid, add_array_api_parameters
+import time
 
 # -- setup logging
 LOGGER = logging.getLogger(__name__)
@@ -136,7 +137,8 @@ def batch_by_size(sizes: Dict[int, int], limit: int, sort_docs: bool = False) ->
         else:
             size = sizes[key]
             if size > limit:
-                LOGGER.warning(f'Document {key} exceeds max limit size: {size}>{limit}')
+                pass
+                #LOGGER.warning(f'Document {key} exceeds max limit size: {size}>{limit}')
             total_size = batched_items[-1]['total_size'] + size
             if total_size > limit:
                 batched_items.append({
@@ -547,10 +549,11 @@ class MicrosoftTranslator:
                     for batch_id, start_lang_idx in enumerate(batch_range):
                         end_lang_idx = start_lang_idx + batch_size
                         target_languages_ = target_languages[start_lang_idx: end_lang_idx]
+                        total_size_ = doc_size * len(target_languages_)
                         
                         response_output, status_code = self._post_request(
                             f'Translating batch {batch_id+1}/{n_batches} of text with idx={doc_id}. Target languages: {target_languages_}',
-                            base_url, target_languages_, texts_in_batch
+                            base_url, target_languages_, texts_in_batch, total_size_
                         )
                         if not is_request_valid(status_code):
                             process_error = self._process_error(
@@ -574,7 +577,7 @@ class MicrosoftTranslator:
             else:
                 response_output, status_code = self._post_request(
                     f'Translating {len(texts)} texts to {len(target_languages)} languages',
-                    base_url, target_languages, texts_in_batch
+                    base_url, target_languages, texts_in_batch, total_size
                 )
 
                 if not is_request_valid(status_code):
@@ -614,6 +617,12 @@ class MicrosoftTranslator:
         """Function to explicitly set no failures to False
         """
         self.no_failures = False
+    
+    @property
+    def _set_success_request_time(self):
+        """Function to set the time a request is made
+        """
+        self.time_of_last_success_request = time.time()
     
     def _update_partial_translation(self, response_output, partial_translation_output, source_language):
 
@@ -681,16 +690,36 @@ class MicrosoftTranslator:
             return 'Your texts exceed max character limits per hour', 400
         
         LOGGER.info(f'Detected `{num_texts}` texts with total request size `{total_request_size}`')
+    
+    def _sleep(self, request_size: int):
+        """Function to sleep prior to requests being made based on the size of the request and the time last successful request was made in order to avoid overloading Microsoft servers
 
-    def _post_request(self, msg: str, base_url: str, target_languages: list, texts: List[str]) -> Tuple[Union[dict, str], int]:
+        :param request_size: size of the request being made
+        """
+        if hasattr(self, 'time_of_last_success_request'):
+            time_diff_since_first_request = time.time() - self.time_of_last_success_request
+            time_diff_needed_for_next_request = request_size / (MAX_CHARACTER_LIMITS_PER_HOUR / 3600) 
+            sleep_time = time_diff_needed_for_next_request - time_diff_since_first_request
+            if sleep_time > 0:
+                LOGGER.debug(f'Sleeping {sleep_time:.3g} seconds...')
+                time.sleep(sleep_time)
+
+    def _post_request(self, msg: str, base_url: str, target_languages: list, texts: List[str], request_size: Optional[int] = None) -> Tuple[Union[dict, str], int]:
         """Internal function to post requests to microsoft API
 
         :param msg: message to log
         :param base_url: base url for making the request
         :param target_languages: list of target languages to translate text to
         :param texts: texts to translate
+        :param request_size: size of the request being made for calculating sleep period, defaults to None
+        
         :return: for successful response, (status_code, [{"translations": [{"text": translated_text_1, "to": lang_1}, ...]}, ...]))
         """
+        if not request_size:
+            n_target_langs = len(target_languages)
+            request_size = sum([len(text)*n_target_langs for text in texts])
+
+        self._sleep(request_size)
 
         url = add_array_api_parameters(base_url, param_name='to', param_values=target_languages)
         LOGGER.info(msg)
@@ -698,8 +727,8 @@ class MicrosoftTranslator:
         resp = requests.post(url, headers=HEADERS, json=body)
         status_code = resp.status_code
         if is_request_valid(status_code):
+            self._set_success_request_time
             return resp.json(), status_code
-
         return resp.text, status_code
 
 # TODO need to ave a check on the total number of characters, if exceeds 2 million then depending on fail translation raise error or not
@@ -707,9 +736,7 @@ class MicrosoftTranslator:
 if __name__ == '__main__':
     translator = MicrosoftTranslator(ignore_on_translation_failure=True, include_partials_in_output=True)
     outputs, status_code = translator.translate_text(['text'*5000, 'text', 'text'*10000, 'text'*100000], ['de', 'en'])
-    print(outputs)
-    print(status_code)
-    '''import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt
     import numpy as np
     import time
 
@@ -722,15 +749,25 @@ if __name__ == '__main__':
         
     limit = 50000
     sizes = 60000
-    num_docs = 1000
-    num_iter = 1000
+    num_docs = 300
+    num_iter = 50
     time_taken_sorted = np.zeros((num_docs, num_iter))
     time_taken = np.zeros((num_docs, num_iter))
+    time_taken_naive = np.zeros((num_docs, num_iter))
+    time_taken_naive_sorted= np.zeros((num_docs, num_iter))
 
     num_batches_sorted = np.zeros((num_docs, num_iter))
     num_batches = np.zeros((num_docs, num_iter))
+    num_batches_naive = np.zeros((num_docs, num_iter))
+    num_batches_naive_sorted = np.zeros((num_docs, num_iter))
+
+    avg_size_sorted = np.zeros((num_docs, num_iter))
+    avg_size = np.zeros((num_docs, num_iter))   
+    avg_size_naive = np.zeros((num_docs, num_iter))
+    avg_size_naive_sorted = np.zeros((num_docs, num_iter))
 
     for i in range(1, num_docs+1):
+        print(f'{i}/{num_docs+1}')
         for j in range(num_iter):
             document_sizes = np.random.choice(np.arange(1, sizes), size=i)
             document_sizes = {i: size for i, size in enumerate(document_sizes)}
@@ -741,22 +778,72 @@ if __name__ == '__main__':
             n_batches, mean, std = get_stats(batched_items_sorted)
             time_taken_sorted[i-1, j] = end-start
             num_batches_sorted[i-1, j] = n_batches
+            avg_size_sorted[i-1, j] = mean
             # unsorted
             start = time.time()
             batched_items = batch_by_size_min_buckets(document_sizes, limit, sort_docs=False)
             end = time.time()
-            n_batches, mean, std = get_stats(batched_items_sorted)
-
+            n_batches, mean, std = get_stats(batched_items)
             time_taken[i-1, j] = end-start
             num_batches[i-1, j] = n_batches
+            avg_size[i-1, j] = mean
+
+            # naive 
+            start = time.time()
+            batched_items_naive = batch_by_size(document_sizes, limit, sort_docs=False)
+            end=time.time()
+            n_batches, mean, std = get_stats(batched_items_naive)
+            time_taken_naive[i-1, j] = end-start
+            num_batches_naive[i-1, j] = n_batches
+            avg_size_naive[i-1, j] = mean
+
+            # naive sorted
+            start = time.time()
+            batched_items_naive_sorted = batch_by_size(document_sizes, limit, sort_docs=True)
+            end=time.time()
+            n_batches, mean, std = get_stats(batched_items_naive_sorted)
+            time_taken_naive_sorted[i-1, j] = end-start
+            num_batches_naive_sorted[i-1, j] = n_batches
+            avg_size_naive_sorted[i-1, j] = mean
+
+            
+
+    def gen_fig(arr):
+        x = range(1, num_docs+1)
+        mean = arr.mean(axis=1)
+        std = arr.std(axis=1)
+        plt.plot(x, mean)
+        plt.fill_between(x, mean-std, mean+std, alpha=0.1, label='_nolegend_')
     plt.figure()
-    plt.plot(range(1, num_docs+1), time_taken_sorted.mean(axis=1), '.')
-    plt.fill_between(range(1, num_docs+1), time_taken_sorted.mean(axis=1)- time_taken_sorted.std(axis=1), time_taken_sorted.mean(axis=1)+time_taken_sorted.std(axis=1), alpha=0.1)
-    plt.plot(range(1, num_docs+1), time_taken.mean(axis=1), '.')
-    plt.fill_between(range(1, num_docs+1), time_taken.mean(axis=1)- time_taken.std(axis=1), time_taken.mean(axis=1)+time_taken.std(axis=1), alpha=0.1)
+    gen_fig(time_taken_sorted)
+    gen_fig(time_taken)
+    gen_fig(time_taken_naive_sorted)
+    gen_fig(time_taken_naive)
+    plt.ylim([0, 0.03])
+    plt.title(f'Time taken vs. number of documents, {num_iter} iterations')
+    plt.xlabel('Num Documents')
+    plt.ylabel(f'Average time taken for {num_iter} iterations')
+    plt.legend(['Quadratic Batching, sorted', 'Quadratic Batching, unsorted', 'Naive, sorted', 'Naive, unsorted'])
 
     plt.figure()
-    plt.plot(range(1, num_docs+1), num_batches_sorted.mean(axis=1), '.')
-    plt.plot(range(1, num_docs+1), num_batches.mean(axis=1), '.')
+    gen_fig(num_batches_sorted)
+    gen_fig(num_batches)
+    gen_fig(num_batches_naive_sorted)
+    gen_fig(num_batches_naive)
+    plt.title(f'Num batches vs. number of documents, {num_iter} iterations')
+    plt.xlabel('Num Documents')
+    plt.ylabel(f'Average num batches for {num_iter} iterations')
+    plt.legend(['Quadratic Batching, sorted', 'Quadratic Batching, unsorted', 'Naive, sorted', 'Naive, unsorted'])
     plt.show()
-    '''
+
+    plt.figure()
+    gen_fig(avg_size_sorted)
+    gen_fig(avg_size)
+    gen_fig(avg_size_naive_sorted)
+    gen_fig(avg_size_naive)
+    plt.title(f'Avg batch size vs. number of documents, {num_iter} iterations')
+    plt.xlabel('Num Documents')
+    plt.ylabel(f'Average average batch size for {num_iter} iterations')
+    plt.legend(['Quadratic Batching, sorted', 'Quadratic Batching, unsorted', 'Naive, sorted', 'Naive, unsorted'])
+    plt.show()
+    
