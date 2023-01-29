@@ -13,7 +13,6 @@ date_format = '%Y-%m-%d %H:%M:%S'
 formatter = logging.Formatter('%(asctime)s:%(name)s:%(levelname)s:%(message)s', datefmt=date_format)
 ch.setFormatter(formatter)
 LOGGER.addHandler(ch)
-
 # -- define global variables
 HEADERS = {
     'Ocp-Apim-Subscription-Key': MICROSOFT_TRANSLATE_API_KEY,
@@ -24,58 +23,77 @@ HEADERS = {
 
 CHARACTER_LIMITS = 50000
 
-def batch_by_size_min_buckets(sizes, limit):
-    """Given dictionary of documents and their sizes {doc_id: doc_size}, batch documents such that the total size of each batch <= limit. Algorithm designed to decrease number of batches
+def batch_by_size_min_buckets(sizes: Dict[Union[int, str], int], limit: int, sort_docs: bool = True) -> List[Dict[str, Union[int, List[int]]]]:
+    """Given dictionary of documents and their sizes {doc_id: doc_size}, batch documents such that the total size of each batch <= limit. Algorithm designed to decrease number of batches, but does not guarantee that it will be an optimal fit
 
-    :param sizes: _description_
-    :type sizes: _type_
-    :param limit: _description_
-    :type limit: _type_
-    :return: _description_
-    :rtype: _type_
+    :param sizes: mapping that gives document size for each document_id, {doc_1: 10, doc_2: 20, ...}
+    :param limit: size limit for each batch
+    :sort_doc: if True sorts `sizes` in descending order
+    :return: [{'idx': [ids_for_batch], 'total_size': total_size_of_documents_in_batch}, ...]
+
+    Example:
+        >>> documents = ['Joe Smith is cool', 'Django', 'Hi']
+        >>> sizes = {i: len(doc) for i, doc in enumerate(documents)}
+        >>> limit = 10
+        >>> batch_by_size(sizes, limit)
+        [{'idx': [0], 'total_size': 17}, {'idx': [1, 2], 'total_size': 8}]
     """
-    sizes = {key: size for key, size in sorted(sizes.items(), key=lambda x: x[1], reverse=True)}
+    if sort_docs:
+        sizes = {key: size for key, size in sorted(sizes.items(), key=lambda x: x[1], reverse=True)}
 
+    
     batched_items = []
     sizes_iter = iter(sizes)
-    key = next(sizes_iter)
+    key = next(sizes_iter)  # doc_id
+
+    # -- helpers
+    def _add_doc(key):
+        batched_items.append({
+            'idx': [key],
+            'total_size': sizes[key]
+        })
+
+    def _append_doc_to_batch(batch_id, key):
+        batched_items[batch_id]['idx'].append(key)
+        batched_items[batch_id]['total_size'] += sizes[key]
+    
     while key is not None:
+
+        # initial condition
         if not batched_items:
-            batched_items.append({
-                'idx': [key],
-                'total_size': sizes[key]
-            })
+            _add_doc(key)
         else:
             size = sizes[key]
+
             if size > limit:
                 LOGGER.warning(f'Document {key} exceeds max limit size: {size}>{limit}')
-                batched_items.append({
-                    'idx': [key],
-                    'total_size': sizes[key]
-                })
+                _add_doc(key)
             else:
+                # find the batch that fits the current doc best
                 batch_id = -1
-                total_capacity = limit
+                total_capacity = limit - size  # how much we can still fit
+                min_capacity = total_capacity
                 for i, batched_item in enumerate(batched_items):
                     total_size = batched_item['total_size']
-                    remaining_capacity = total_capacity - total_size - size
+                    remaining_capacity =  total_capacity - total_size  # we want to minimise this
+
+                    # current batch too large for doc, go to next batch
                     if remaining_capacity < 0:
                         continue
-                    elif remaining_capacity == 0:
+                    # current batch is a better fit for doc, save batch_id
+                    elif remaining_capacity < min_capacity:
+                        min_capacity = remaining_capacity
                         batch_id = i
-                    else:
-                        total_capacity = remaining_capacity
-                        batch_id = i
-                
-                if batch_id == -1:
-                    batched_items.append({
-                        'idx': [key],
-                        'total_size': sizes[key]
-                    })
-                else:
 
-                    batched_items[batch_id]['idx'].append(key)
-                    batched_items[batch_id]['total_size'] += sizes[key]
+                    # if perfect fit, break loop
+                    if remaining_capacity == 0:
+                        break
+                
+
+                if batch_id == -1:
+                    _add_doc(key)
+                else:
+                    _append_doc_to_batch(batch_id, key)
 
         key = next(sizes_iter, None) 
     return batched_items
@@ -303,6 +321,7 @@ def translate_text(
     LOGGER.info(f'Translating {len(text)} texts to {len(target_language)} languages')
     resp = requests.post(url, headers=HEADERS, json=body)
     status_code = resp.status_code
+    print(resp.headers.get('Retry-After'))
 
     if is_request_valid(status_code):
         return resp.json(), status_code
@@ -310,4 +329,5 @@ def translate_text(
     return resp.text, status_code
 
 if __name__ == '__main__':
-    print(translate_text('test', 'de'))
+    print(translate_text('test'*10000, ['de', 'ar'])[0])
+    print(translate_text('test'*10000, 'de')[1])
