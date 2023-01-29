@@ -328,6 +328,168 @@ def translate_text(
 
     return resp.text, status_code
 
+def translate_text_v3(
+    text: Union[str, list],
+    target_language: Union[str, list],
+    source_language: Optional[str] = None,
+    api_version: str = '3.0', raise_error_on_translation_failure=True, include_partials_in_output=False) -> tuple:
+    """translates txt using the microsoft translate API
+
+    :param text: text to be translated. Either single or multiple (stored in a list)
+    :param target_language: ISO format of target translation languages
+    :param source_language: ISO format of source language. If not provided is inferred by the translator, defaults to None
+    :param api_version: api version to use, defaults to "3.0"
+    :param raise_error_on_translation_failure: if `True`, raises errors on translation failure. If `False` ignores failed translations in output
+    :pram include_partials_in_output: if `True` includes partially translated texts in output, otherwise ignores them
+    :return: for successful response, (status_code, [{"translations": [{"text": translated_text_1, "to": lang_1}, ...]}, ...]))        
+    """
+
+    url = f'{MICROSOFT_TRANSLATE_URL}/translate?api-version={api_version}'
+
+    if isinstance(target_language, str):
+        target_language = [target_language]
+
+    if source_language:
+        url = f'{url}&from={source_language}'
+
+    if isinstance(text, str):
+        text = [text]
+    
+    n_target_langs = len(target_language)
+    
+    # get maximum size of each document based on target languages
+    sizes_dict = {i: len(text_)*n_target_langs for i, text_ in enumerate(text)}
+    batched_texts = batch_by_size_min_buckets(sizes_dict, CHARACTER_LIMITS)
+
+    # for each batch, translate the texts. If successful append to list
+    translation_outputs = []
+    for batch in batched_texts:
+        translation_output = []
+        doc_ids = batch['idx']
+        total_size = batch['total_size']
+
+        if total_size > CHARACTER_LIMITS:
+            doc_size = sizes_dict[doc_ids[0]]
+            batch_size = CHARACTER_LIMITS // doc_size
+            
+            # case when a single doc is too large to be translated
+            if not batch_size:
+                # TODO the ID of this should be saved!
+                msg = f'Text `{doc_ids[0]}` too large to be translated'
+                if raise_error_on_translation_failure:
+                    raise Exception(msg)
+                LOGGER.error(msg)
+            
+            # case when single doc too big to be translated to all language, but small enough that it can be translated to some languages
+            else:
+                _translation_output = dict(translations=[])
+                batch_range = range(0, n_target_langs, batch_size)
+                n_batches = len(batch_range)
+                
+                _translation_failed = False
+                # batch by target languages
+                for batch_id, start_lang_idx in enumerate(batch_range):
+                    end_lang_idx = start_lang_idx + batch_size
+                    target_languages_ = target_language[start_lang_idx: end_lang_idx]
+                    
+                    # rebuild the url for subset of langs
+                    url_ = add_array_api_parameters(url, param_name='to', param_values=target_languages_)
+                    body = [{'text': text[doc_ids[0]]}]
+                    
+                    LOGGER.info(f'Translating batch {batch_id+1}/{n_batches} of text with idx={doc_ids[0]}. Target languages: {target_languages_}')
+                    resp = requests.post(url_, headers=HEADERS, json=body)
+                    status_code = resp.status_code
+                    if not is_request_valid(status_code):
+                        msg = f'Partial translation of text `{doc_ids[0]}` to languages {target_languages_} failed.'
+                        if raise_error_on_translation_failure:
+                            raise Exception(msg)
+                        LOGGER.error(msg)
+                        _translation_failed = True
+                        if not include_partials_in_output:
+                            break
+                    
+                    partial_translation_output = resp.json()
+                    # concatenate outputs in correct format
+                    _translation_output['translations'] += partial_translation_output['translations']
+                
+                if not _translation_failed or include_partials_in_output:
+                    translation_output.append(_translation_output)
+                
+        else:
+            # -- code as before, except translation_output now part of else
+            batch_texts = [text[doc_id] for doc_id in doc_ids]
+            body = [{'text': text_} for text_ in batch_texts]
+            LOGGER.info(f'Translating {len(text)} texts to {len(target_language)} languages')
+            # rebuild url for all languages
+            url_ = add_array_api_parameters(
+                url,
+                param_name='to',
+                param_values=target_language
+            )
+            resp = requests.post(url_, headers=HEADERS, json=body)
+            status_code = resp.status_code
+            if not is_request_valid(status_code):
+                msg = f'Translation failed for texts {doc_ids}. Reason: {resp.text}'
+                if raise_error_on_translation_failure:
+                    raise Exception(msg)
+                LOGGER.error(msg)
+            else:
+                translation_output += resp.json()
+
+        translation_outputs += translation_output
+    
+    return translation_outputs, status_code
+
+# TODO need to have a check on the total number of characters, if exceeds 2 million then depending on fail translation raise error or not
+# you cannot really guarantee that it will not cause a 429 error...
 if __name__ == '__main__':
-    print(translate_text('test'*10000, ['de', 'ar'])[0])
-    print(translate_text('test'*10000, 'de')[1])
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import time
+
+    def get_stats(batched_items):
+        num_batches = len(batched_items)
+        total_sizes = np.array([batch['total_size'] for batch in batched_items])
+        mean = total_sizes.mean()
+        std = total_sizes.std()
+        return num_batches, mean, std
+        
+    limit = 50000
+    sizes = 60000
+    num_docs = 1000
+    num_iter = 1000
+    time_taken_sorted = np.zeros((num_docs, num_iter))
+    time_taken = np.zeros((num_docs, num_iter))
+
+    num_batches_sorted = np.zeros((num_docs, num_iter))
+    num_batches = np.zeros((num_docs, num_iter))
+
+    for i in range(1, num_docs+1):
+        for j in range(num_iter):
+            document_sizes = np.random.choice(np.arange(1, sizes), size=i)
+            document_sizes = {i: size for i, size in enumerate(document_sizes)}
+            # sorted
+            start = time.time()
+            batched_items_sorted = batch_by_size_min_buckets(document_sizes, limit, sort_docs=True)
+            end = time.time()
+            n_batches, mean, std = get_stats(batched_items_sorted)
+            time_taken_sorted[i-1, j] = end-start
+            num_batches_sorted[i-1, j] = n_batches
+            # unsorted
+            start = time.time()
+            batched_items = batch_by_size_min_buckets(document_sizes, limit, sort_docs=False)
+            end = time.time()
+            n_batches, mean, std = get_stats(batched_items_sorted)
+
+            time_taken[i-1, j] = end-start
+            num_batches[i-1, j] = n_batches
+    plt.figure()
+    plt.plot(range(1, num_docs+1), time_taken_sorted.mean(axis=1), '.')
+    plt.fill_between(range(1, num_docs+1), time_taken_sorted.mean(axis=1)- time_taken_sorted.std(axis=1), time_taken_sorted.mean(axis=1)+time_taken_sorted.std(axis=1), alpha=0.1)
+    plt.plot(range(1, num_docs+1), time_taken.mean(axis=1), '.')
+    plt.fill_between(range(1, num_docs+1), time_taken.mean(axis=1)- time_taken.std(axis=1), time_taken.mean(axis=1)+time_taken.std(axis=1), alpha=0.1)
+
+    plt.figure()
+    plt.plot(range(1, num_docs+1), num_batches_sorted.mean(axis=1), '.')
+    plt.plot(range(1, num_docs+1), num_batches.mean(axis=1), '.')
+    plt.show()
