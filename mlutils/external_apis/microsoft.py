@@ -23,12 +23,13 @@ HEADERS = {
 
 CHARACTER_LIMITS = 50000
 
-def batch_by_size_min_buckets(sizes: Dict[Union[int, str], int], limit: int, sort_docs: bool = True) -> List[Dict[str, Union[int, List[int]]]]:
+def batch_by_size_min_buckets(sizes: Dict[Union[int, str], int], limit: int, sort_docs: bool = True, on_encounter_doc_exceed_limit: Optional[str] = None) -> List[Dict[str, Union[int, List[int]]]]:
     """Given dictionary of documents and their sizes {doc_id: doc_size}, batch documents such that the total size of each batch <= limit. Algorithm designed to decrease number of batches, but does not guarantee that it will be an optimal fit
 
     :param sizes: mapping that gives document size for each document_id, {doc_1: 10, doc_2: 20, ...}
     :param limit: size limit for each batch
     :sort_doc: if True sorts `sizes` in descending order
+    :on_encounter_doc_exceed_limit: strategy to deal with documents that exceed max size. If `warn` then issues warning, if `raise` raises error, else does nothing
     :return: [{'idx': [ids_for_batch], 'total_size': total_size_of_documents_in_batch}, ...]
 
     Example:
@@ -66,7 +67,12 @@ def batch_by_size_min_buckets(sizes: Dict[Union[int, str], int], limit: int, sor
             size = sizes[key]
 
             if size > limit:
-                LOGGER.warning(f'Document {key} exceeds max limit size: {size}>{limit}')
+                msg = f'Document {key} exceeds max limit size: {size}>{limit}'
+                if on_encounter_doc_exceed_limit == 'raise':
+                    raise Exception(msg)
+                elif on_encounter_doc_exceed_limit == 'warn':
+                    LOGGER.warning(msg)
+                
                 _add_doc(key)
             else:
                 # find the batch that fits the current doc best
@@ -363,6 +369,7 @@ def translate_text_v3(
 
     # for each batch, translate the texts. If successful append to list
     translation_outputs = []
+
     for batch in batched_texts:
         translation_output = []
         doc_ids = batch['idx']
@@ -444,10 +451,19 @@ def translate_text_v3(
 MAX_CHARACTER_LIMITS_PER_HOUR = 2000000
 
 class MicrosoftTranslator:
+    """Class for translating text using the Microsoft Translate API
 
-    # maybe we should simply define the api version we want to use in __init__. Then we can have separate functions for translation requests, and we store only the latest metadata?
-    # not really sure tbh... need to think about this!
-    def __init__(self, api_version='3.0', ignore_on_translation_failure=False, include_partials_in_output=False):
+    :param api_version: api version to use, defaults to "3.0"
+    :param ignore_on_translation_failure: if `False`, returns failed translations with error and status code. If `False` ignores failed translations in output, defaults to False
+    :param include_partials_in_output: if `True` includes partially translated texts in output, otherwise ignores them, defaults to False
+
+    """
+    def __init__(
+        self,
+        api_version: str = '3.0',
+        ignore_on_translation_failure: bool = False,
+        include_partials_in_output: bool = False
+    ):
         
         base_url = f'{MICROSOFT_TRANSLATE_URL}/translate?api-version={api_version}'
 
@@ -456,56 +472,19 @@ class MicrosoftTranslator:
         self.ignore_on_translation_failure = ignore_on_translation_failure
         self.include_partials_in_output = include_partials_in_output
     
-    @property
-    def _set_request_default(self):
-        self.translation_errors = {}
-        self.no_failures = True
+    def translate_text(
+        self,
+        texts: Union[str, list],
+        target_languages: Union[str, list],
+        source_language: Optional[str] = None
+    ) -> tuple:
+        """translates txt using the microsoft translate API
 
-    @property
-    def _set_no_failures_to_false(self):
-        self.no_failures = False
-        
-    def _update_translation_errors(self, response_text, status_code, doc_ids, target_languages):
-        self.translation_errors[tuple(doc_ids)] = dict(
-            reason=response_text,
-            status_code=status_code,
-            target_languages=target_languages
-        )
-
-    def _profile_texts(self, texts):
-        num_texts = len(texts)
-        total_request_size = sum(len(text) for text in texts)
-        if total_request_size > MAX_CHARACTER_LIMITS_PER_HOUR:
-            raise Exception('Your texts exceed max character limits per hour')
-        LOGGER.info(f'Detected `{num_texts}` texts with total request size `{total_request_size}`')
-    
-    def _process_error(self, msg, response_text, status_code, doc_ids, target_languages):
-
-        self._set_no_failures_to_false
-        
-        self._update_translation_errors(response_text, status_code, doc_ids, target_languages)
-
-        if not self.ignore_on_translation_failure:
-            return response_text, status_code
-
-        LOGGER.error(msg)
-
-    def _generate_request_body(self, texts, doc_ids):
-        body = [{'text': texts[doc_id]} for doc_id in doc_ids]
-        return body
-
-    def _post_request(self, msg, base_url, target_languages, body):
-        # rebuild the url for subset of langs
-        url = add_array_api_parameters(base_url, param_name='to', param_values=target_languages)
-        LOGGER.info(msg)
-        resp = requests.post(url, headers=HEADERS, json=body)
-        status_code = resp.status_code
-        if is_request_valid(status_code):
-            return resp.json(), status_code
-
-        return resp.text, status_code
-
-    def translate_text(self, texts, target_languages, source_language=None):
+        :param texts: text(s) to be translated. Can either be a single text (str) or multiple (list)
+        :param target_languages: ISO format of target translation language(s). Can be single lang (str) or multiple (list)
+        :param source_language: ISO format of source language. If not provided is inferred by the translator, defaults to None
+        :return: for successful response, (status_code, [{"translations": [{"text": translated_text_1, "to": lang_1}, ...]}, ...]))         
+        """
 
         # -- create storage for translation failures and flag for failed translation
         self._set_request_default
@@ -513,6 +492,8 @@ class MicrosoftTranslator:
         # add source language to url
         if source_language:
             base_url = f'{self.base_url}&from={source_language}'
+        else:
+            base_url = self.base_url
 
         # standardise target_languages and texts types
         if isinstance(target_languages, str):
@@ -521,34 +502,43 @@ class MicrosoftTranslator:
         if isinstance(texts, str):
             texts = [texts]
 
+
+
         # batch texts for translation, based on doc_size = len(doc)*n_target_langs
         n_target_langs = len(target_languages)
         sizes_dict = {i: len(text)*n_target_langs for i, text in enumerate(texts)}
+
+        profile_texts = self._profile_texts(sizes_dict)
+        if profile_texts:
+            return profile_texts
+
         batched_texts = batch_by_size_min_buckets(sizes_dict, CHARACTER_LIMITS, sort_docs=True)
 
-        translation_outputs = []
+        translation_outputs = []  # variable to store all translation outputs
+
         for batch in batched_texts:
-            batch_translation_output = []
+            batch_translation_output = []  # variable to store translation output for single batch
             doc_ids = batch['idx']
             total_size = batch['total_size']
-            body = self._generate_request_body(texts, doc_ids)
+            texts_in_batch = [texts[doc_id] for doc_id in doc_ids]
+            # -- case when batch exceeds character limits
             if total_size > CHARACTER_LIMITS:
                 assert len(doc_ids) == 1, 'Critical error: batching function is generating batches that exceed max limit with more than 1 text. Revisit the function and fix this.'
 
                 doc_id = doc_ids[0]
-                doc_size = sizes_dict[doc_id]
+                doc_size = sizes_dict[doc_id] // n_target_langs
                 batch_size = CHARACTER_LIMITS // doc_size
                 
-                # case when a single doc is too large to be translated
+                # -- case when a single doc is too large to be translated
                 if not batch_size:
-                    process_error = self._process_error(f'Text {doc_id} too large to be translated', 'Max character limit for request', 400, doc_ids, target_languages)
+                    process_error = self._process_error(f'Text idx={doc_id} too large to be translated', 'Max character limit for request', 400, doc_ids, target_languages)
                     if process_error:
                         return process_error
                 
-                # case when single doc too big to be translated to all language, but small enough that it can be translated to some languages
+                # -- case when single doc too big to be translated to all language, but small enough that it can be translated to some languages
                 else:
-                    _translation_output = dict(translations=[])
-                    _translation_failed = False
+                    _translation_output = dict()  # variable to store translations for single text but different language batches
+                    _translation_failed = False  # variable to track if translation is partial
 
                     batch_range = range(0, n_target_langs, batch_size)
                     n_batches = len(batch_range)
@@ -558,36 +548,35 @@ class MicrosoftTranslator:
                         end_lang_idx = start_lang_idx + batch_size
                         target_languages_ = target_languages[start_lang_idx: end_lang_idx]
                         
-                        # rebuild the url for subset of langs
                         response_output, status_code = self._post_request(
                             f'Translating batch {batch_id+1}/{n_batches} of text with idx={doc_id}. Target languages: {target_languages_}',
-                            base_url, target_languages_, body
+                            base_url, target_languages_, texts_in_batch
                         )
                         if not is_request_valid(status_code):
                             process_error = self._process_error(
-                                f'Partial translation of text `{doc_id}` to languages {target_languages_} failed. Reason: {response_output}',
+                                f'Partial translation of text idx={doc_id} to languages {target_languages_} failed. Reason: {response_output}',
                                 response_output, status_code, doc_ids, target_languages_)
                             if process_error:
                                 return process_error
                             
+                            # failure indicates translation is partial. Break loop if we don't case about partials in output
                             _translation_failed = True
                             if not self.include_partials_in_output:
                                 break
-
-                        # concatenate outputs in correct format
-                        _translation_output['translations'] += response_output['translations']
-
-                        if not source_language:
-                            _translation_output['detectedLanguage'] = response_output['detectedLanguage']
+                        else:
+                            self._update_partial_translation(response_output, _translation_output, source_language)
                     
                     if not _translation_failed or self.include_partials_in_output:
-                        batch_translation_output.append(_translation_output)
-                    
+                        if _translation_output:
+                            batch_translation_output.append(_translation_output)
+
+            # -- case when batch does not exceed character limits
             else:
                 response_output, status_code = self._post_request(
                     f'Translating {len(texts)} texts to {len(target_languages)} languages',
-                    base_url, target_languages, body
+                    base_url, target_languages, texts_in_batch
                 )
+
                 if not is_request_valid(status_code):
                     process_error = self._process_error(
                         f'Translation failed for texts {doc_ids}. Reason: {response_output}',
@@ -602,17 +591,124 @@ class MicrosoftTranslator:
         
         if self.no_failures:
             status_code = 200
+        # case when all translations failed, so return translation errors instead
+        elif not translation_outputs:
+            translation_outputs = self.translation_errors
+            status_code = 400
+        # case when translations partially failed, modify status code
         else:
             status_code = 206
 
         return translation_outputs, status_code
     
+    @property
+    def _set_request_default(self):
+        """Function for resetting translation errors and no_failures flag
+        """
+
+        self.translation_errors = {}
+        self.no_failures = True
+
+    @property
+    def _set_no_failures_to_false(self):
+        """Function to explicitly set no failures to False
+        """
+        self.no_failures = False
+    
+    def _update_partial_translation(self, response_output, partial_translation_output, source_language):
+
+        # concatenate outputs in correct format
+        if 'translations' not in partial_translation_output:
+            partial_translation_output['translations'] = response_output['translations']
+        else:
+            partial_translation_output['translations'] += response_output['translations']
+
+        if not source_language:
+            if 'detectedLanguage' not in partial_translation_output:
+                partial_translation_output['detectedLanguage'] = response_output['detectedLanguage']
+            else:
+                partial_translation_output['detectedLanguage'] += response_output['detectedLanguage']
+        
+        return partial_translation_output
+
+    def _update_translation_errors(self, response_text: str, status_code: int, doc_ids: list, target_languages: list):
+        """Add failed translation to errors dictionary
+
+        :param response_text: response text from failed request (status_code not beginning with 2)
+        :param status_code: status code from failed request
+        :param doc_ids: documents that were to be translated
+        :param target_languages: target languages used in request
+        """
+        doc_ids = tuple(doc_ids)
+        if doc_ids not in self.translation_errors:
+            self.translation_errors[doc_ids] = dict(
+                reason=response_text,
+                status_code=status_code,
+                target_languages=target_languages
+            )
+        else:
+            self.translation_errors[doc_ids]['target_languages'] += target_languages
+            self.translation_errors[doc_ids]['status_code'] = status_code
+            self.translation_errors[doc_ids]['reason'] = response_text
+        
+    def _process_error(self, msg: str, response_text: str, status_code: int, doc_ids: list, target_languages: list):
+        """Processes failed request based on `ignore_on_translation_failure` strategy
+
+        :param msg: message to return or log depending on `ignore_on_translation_failure` strategy
+        :param response_text: response text from failed request (status_code not beginning with 2)
+        :param status_code: status code from failed request
+        :param doc_ids: documents that were to be translated
+        :param target_languages: target languages used in request
+        """
+
+        self._set_no_failures_to_false
+        
+        self._update_translation_errors(response_text, status_code, doc_ids, target_languages)
+
+        if not self.ignore_on_translation_failure:
+            return response_text, status_code
+
+        LOGGER.error(msg)
+
+    def _profile_texts(self, sizes: Dict[Union[int, str], int]):
+        """Profiles texts to see if the request can be translated
+
+        :param sizes: size mapping for each document, {doc_id_1: size, ...}
+        """
+        num_texts = len(sizes)
+        total_request_size = sum(sizes.values())
+        if total_request_size > MAX_CHARACTER_LIMITS_PER_HOUR:
+            return 'Your texts exceed max character limits per hour', 400
+        
+        LOGGER.info(f'Detected `{num_texts}` texts with total request size `{total_request_size}`')
+
+    def _post_request(self, msg: str, base_url: str, target_languages: list, texts: List[str]) -> Tuple[Union[dict, str], int]:
+        """Internal function to post requests to microsoft API
+
+        :param msg: message to log
+        :param base_url: base url for making the request
+        :param target_languages: list of target languages to translate text to
+        :param texts: texts to translate
+        :return: for successful response, (status_code, [{"translations": [{"text": translated_text_1, "to": lang_1}, ...]}, ...]))
+        """
+
+        url = add_array_api_parameters(base_url, param_name='to', param_values=target_languages)
+        LOGGER.info(msg)
+        body = [{'text': text} for text in texts]
+        resp = requests.post(url, headers=HEADERS, json=body)
+        status_code = resp.status_code
+        if is_request_valid(status_code):
+            return resp.json(), status_code
+
+        return resp.text, status_code
 
 # TODO need to ave a check on the total number of characters, if exceeds 2 million then depending on fail translation raise error or not
 # you cannot really guarantee that it will not cause a 429 error...
 if __name__ == '__main__':
-    print(translate_text('1000'*10000, 'de'))
-    
+    translator = MicrosoftTranslator(ignore_on_translation_failure=True, include_partials_in_output=True)
+    outputs, status_code = translator.translate_text(['text'*5000, 'text', 'text'*10000, 'text'*100000], ['de', 'en'])
+    print(outputs)
+    print(status_code)
     '''import matplotlib.pyplot as plt
     import numpy as np
     import time
